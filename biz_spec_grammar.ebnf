@@ -1,0 +1,218 @@
+(* ============================================================
+   RQE-Core 1.1 — Portable EBNF (designed to translate to ANTLR4 + tree-sitter)
+   - Statements terminated with ';'
+   - Blocks use '{ }'
+   - Queries are function-form (easy for both parsers)
+   - Adds: system bindings (via), finance predefined types, functions
+   ============================================================ *)
+
+(* ---------- Lexical tokens (informative; implement in lexer) ---------- *)
+IDENT   = ? [A-Za-z_][A-Za-z0-9_]* ? ;
+INT     = ? [0-9]+ ? ;
+DEC     = ? [0-9]+ "." [0-9]+ ? ;
+STRING  = ? "'" ( [^'\\] | "\\" . )* "'" ? ;
+BOOL    = "true" | "false" ;
+
+(* Optional literal for yyyymmdd; if you add this token, you can allow YYYYMMDD literals. *)
+DATE8   = ? [0-9]{8} ? ;
+
+(* ---------- Program ---------- *)
+program     = { decl } ;
+
+decl        = type_alias
+            | enum_decl
+            | record_decl
+            | message_decl
+            | table_decl
+            | system_decl
+            | channel_decl
+            | api_decl
+            | delivery_decl
+            | schedule_decl
+            | function_decl
+            | rule_decl
+            ;
+
+(* ============================================================
+   Types
+   ============================================================ *)
+type_alias   = "type", IDENT, "=", type, ";" ;
+enum_decl    = "enum", IDENT, "=", STRING, { "|", STRING }, ";" ;
+
+record_decl  = "type", IDENT, "=", record_type, ";" ;
+message_decl = "message", IDENT, ".", "v", INT, "=", record_type, ";" ;
+
+type         = type_atom, [ "?" ] ;
+type_atom    = prim_type
+            | finance_type
+            | IDENT
+            | "List", "[", type, "]"
+            | "Map",  "[", type, ",", type, "]"
+            | record_type
+            ;
+
+prim_type    = "String" | "Int" | "Boolean" | "UUID" | "Date" | "Timestamp"
+            | "Decimal", "(", INT, ",", INT, ")"
+            ;
+
+(* Predefined finance/IB semantic types (built-ins recognized by type checker) *)
+finance_type = "Money" | "Amount" | "Price" | "Qty" | "Notional"
+            | "Percent" | "Rate" | "BasisPoints" | "Ratio"
+            | "Multiplier" | "IndexFactor"
+            | "YYYYMMDD"
+            | "ISIN" | "CUSIP" | "SEDOL" | "RIC"
+            | "MIC" | "LEI" | "BIC"
+            | "Currency" | "Country"
+            ;
+
+record_type  = "{", [ field_type, { ",", field_type } ], "}" ;
+field_type   = IDENT, ":", type ;
+
+type_ref     = IDENT | record_type ;
+
+(* ============================================================
+   Tables / Systems / Channels / APIs
+   ============================================================ *)
+table_decl   = IDENT, ":", "Table", "[", type_ref, "]", ";" ;
+
+(* Systems define external connectors that channels/APIs bind to. *)
+system_decl  = "system", IDENT, "=", system_kind, "{", { system_prop, ";" }, "}", ";" ;
+system_kind  = "kafka" | "amqp" | "mq" | "fix" | "http" | IDENT ;
+system_prop  = IDENT, ":", STRING ;
+
+channel_decl = "channel", IDENT, "=", ("topic" | "queue"), "(", STRING, ")", "via", IDENT, ";" ;
+
+api_decl     = "api", IDENT, "=", "http", "via", IDENT, "{", { api_item }, "}" ;
+api_item     = "baseUrl", ":", STRING, ";"
+            | "endpoint", http_method, STRING, "(", type_ref, ")", "->", (INT | type_ref), ";"
+            | "auth", ":", auth_spec, ";"
+            ;
+
+http_method  = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" ;
+auth_spec    = "mTLS" | ("OAuth2", "(", IDENT, ")") | IDENT ;
+
+(* ============================================================
+   Delivery / Schedule
+   ============================================================ *)
+delivery_decl   = "delivery", delivery_target, ":", "{", { delivery_prop, ";" }, "}" ;
+delivery_target = IDENT | (IDENT, ".", http_method, STRING) ;
+
+delivery_prop = "semantics", ":", ("at-least-once" | "at-most-once")
+              | "dedupeKey", ":", IDENT
+              | "idempotencyKey", ":", IDENT
+              | "dedupeWindow", ":", duration
+              | "retry", ":", "exponentialBackoff", "(", "max", "=", INT,
+                    [ ",", "maxDelay", "=", duration ], ")"
+              ;
+
+duration     = INT, ("s" | "m" | "h" | "d") ;
+
+schedule_decl = "schedule", IDENT, ":", "every", duration, ";" ;
+
+(* ============================================================
+   Functions (built-ins or user-declared signatures)
+   - You can treat built-ins as preloaded declarations.
+   ============================================================ *)
+function_decl = "function", qident, "(", [ param_list ], ")", ":", type, ";" ;
+param_list    = param, { ",", param } ;
+param         = IDENT, ":", type ;
+
+(* ============================================================
+   Rules / Statements
+   ============================================================ *)
+rule_decl    = "rule", IDENT, ":", block ;
+block        = "{", { stmt }, "}" ;
+
+stmt         = when_stmt
+            | let_stmt
+            | must_stmt
+            | if_stmt
+            | for_each_stmt
+            | do_stmt
+            | stop_stmt
+            ;
+
+when_stmt    = "when", trigger, ";" ;
+trigger      = IDENT, "receives", IDENT, ":", type_ref
+            | IDENT, "as", IDENT, ("created" | "updated" | "ingested")
+            | "clock", IDENT
+            ;
+
+let_stmt     = "let", IDENT, "=", rhs, ";" ;
+rhs          = query | selector | expr ;
+
+selector     = ("single" | "all" | "exists"), IDENT, "as", IDENT, "where", expr ;
+
+must_stmt    = "must", expr, [ "else", block ], ";" ;
+
+if_stmt      = "if", expr, block, [ "else", block ] ;
+
+for_each_stmt= "for", "each", IDENT, "in", expr, block ;
+
+do_stmt      = "do", action, ";" ;
+action       = publish | call | upsert | set_stmt | create ;
+
+publish      = "publish", IDENT, "<-", construct ;
+call         = "call", IDENT, ".", http_method, STRING, "<-", construct ;
+
+upsert       = "upsert", IDENT, "by", IDENT, "=", expr, "with", expr ;
+set_stmt     = "set", lvalue, "=", expr ;
+lvalue       = IDENT | (IDENT, ".", IDENT) ;
+
+create       = "create", type_ref, construct_body ;
+
+construct    = type_ref, construct_body ;
+construct_body = "{", [ field_assign, { ",", field_assign } ], "}" ;
+field_assign = IDENT, "=", expr ;
+
+stop_stmt    = "stop", ";" ;
+
+(* ============================================================
+   Queries (function form; portable)
+   ============================================================ *)
+query        = filter_q | join_q | group_q | sort_q | take_q | select_q ;
+
+filter_q     = "filter", "(", IDENT, ",", IDENT, ",", expr, ")" ;
+(* filter(TableName, rowAlias, predicate) *)
+
+join_q       = ("join" | "leftJoin"), "(", IDENT, ",", IDENT, ",", IDENT, ",", IDENT, ",",
+                expr, [ ",", expr ], ")" ;
+(* join(L, lAlias, R, rAlias, onExpr [, whereExpr]) *)
+
+group_q      = "group", "(", query, ",", IDENT, ",", expr_list, ",", agg_list, ")" ;
+(* group(query, rowAlias, keyExprList, aggList) *)
+
+sort_q       = "sort", "(", query, ",", expr, ",", ("asc" | "desc"), ")" ;
+take_q       = "take", "(", query, ",", INT, ")" ;
+select_q     = "select", "(", query, [ ",", "distinct" ], ",", expr_list, ")" ;
+
+expr_list    = expr, { ",", expr } ;
+
+agg_list     = agg_item, { ",", agg_item } ;
+agg_item     = IDENT, "=", agg_func, "(", expr, ")" ;
+agg_func     = "sum" | "count" | "min" | "max" | "avg" ;
+
+(* ============================================================
+   Expressions (precedence tiers; portable)
+   ============================================================ *)
+expr         = or_expr ;
+or_expr      = and_expr, { "or", and_expr } ;
+and_expr     = cmp_expr, { "and", cmp_expr } ;
+cmp_expr     = add_expr, [ ("=" | "!=" | "<" | "<=" | ">" | ">="), add_expr ] ;
+add_expr     = mul_expr, { ("+" | "-"), mul_expr } ;
+mul_expr     = unary_expr, { ("*" | "/"), unary_expr } ;
+unary_expr   = [ "not" | "-" ], postfix_expr ;
+postfix_expr = primary, [ "!" ] ;
+
+primary      = literal
+            | IDENT
+            | IDENT, ".", IDENT
+            | qident, "(", [ expr_list ], ")"
+            | "(", expr, ")"
+            | ( (IDENT | (IDENT, ".", IDENT)), "is", ("present" | "absent") )
+            ;
+
+qident       = IDENT, { ".", IDENT } ;
+
+literal      = STRING | INT | DEC | BOOL | date8_lit ;
+date8_lit    = DATE8 ;  (* optional: if lexer provides DATE8; otherwise use INT+validation or parseYYYYMMDD(INT) *)
