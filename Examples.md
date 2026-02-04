@@ -1,4 +1,200 @@
 ```
+data dictionary {
+  enum Side = 'BUY' | 'SELL';
+  enum SecurityType = 'EQUITY' | 'BOND' | 'SWAP';
+  enum BlockStatus = 'OPEN' | 'READY_TO_ALLOCATE' | 'ALLOCATED' | 'BUSTED';
+
+  type Instrument = {
+    instrumentId : String,
+    securityType : SecurityType,
+    isin         : ISIN,
+    currency     : Currency,
+    venue        : MIC
+  };
+
+  type Order = {
+    orderId      : OrderId,
+    accountId    : AccountId,
+    instrumentId : String,
+    side         : Side,
+    qty          : Qty,
+    trader       : String
+  };
+
+  type Execution = {
+    execId       : ExecId,
+    orderId      : OrderId,
+    instrumentId : String,
+    qty          : Qty,
+    price        : Price,
+    tradeDate    : YYYYMMDD,
+    venue        : MIC
+  };
+
+  type BlockTrade = {
+    blockId      : BlockId,
+    instrumentId : String,
+    side         : Side,
+    tradeDate    : YYYYMMDD,
+    grossQty     : Qty,
+    avgPrice     : Price,
+    status       : BlockStatus
+  };
+
+  type Allocation = {
+    allocId      : AllocId,
+    blockId      : BlockId,
+    accountId    : AccountId,
+    allocQty     : Qty,
+    allocPrice   : Price
+  };
+
+  type SettlementInstruction = {
+    settleId     : SettleId,
+    allocId      : AllocId,
+    accountId    : AccountId,
+    isin         : ISIN,
+    settleDate   : Date,
+    method       : 'DVP' | 'FOP',
+    cashAmount   : Money
+  };
+
+  message ExecutionReceived.v1 = {
+    execId    : ExecId,
+    orderId   : OrderId,
+    qty       : Qty,
+    price     : Price,
+    venue     : MIC
+  };
+
+  Instruments  : Table[Instrument];
+  Orders       : Table[Order];
+  Executions   : Table[Execution];
+  Blocks       : Table[BlockTrade];
+  Allocations  : Table[Allocation];
+}
+
+communications {
+
+  systems {
+    system MarketKafka = kafka {
+      brokers  : 'k1:9092,k2:9092';
+      clientId : 'trade-processing';
+    };
+
+    system SettlementHttp = http {
+      baseUrl : 'https://settlement.internal';
+    };
+  }
+
+  channels {
+    channel ExecutionFeed =
+      topic('fix.executions') via MarketKafka {
+        protocol : kafka;
+        format   : fix;
+        key      : execId;
+        message  : ExecutionReceived.v1;
+      };
+
+    channel TradeEvents =
+      topic('trade.events') via MarketKafka {
+        protocol : kafka;
+        format   : json;
+        key      : blockId;
+        message  : ExecutionReceived.v1;
+      };
+  }
+
+  apis {
+    api SettlementGateway = http via SettlementHttp {
+      endpoint POST '/v1/settlements' (SettlementInstruction) -> 202;
+    };
+  }
+
+  delivery {
+    delivery ExecutionFeed: {
+      semantics : at-least-once;
+      dedupeKey : execId;
+    };
+
+    delivery SettlementGateway.POST '/v1/settlements': {
+      semantics      : at-least-once;
+      idempotencyKey : settleId;
+    };
+  }
+}
+
+rules {
+
+  timing {
+    schedule DailyCutoff : every 1d;
+
+    rule IngestExecution timing {
+      maxLag  : 5m;
+      timeout : 30s;
+      runOn   : DailyCutoff;
+    };
+  }
+
+  logic {
+    rule IngestExecution: {
+      when ExecutionFeed receives e: Execution;
+
+      must e.qty > 0;
+      must e.price > 0;
+
+      do upsert Executions by execId = e.execId with e;
+
+      do publish TradeEvents <- ExecutionReceived.v1{
+        execId  = e.execId,
+        orderId = e.orderId,
+        qty     = e.qty,
+        price   = e.price,
+        venue   = e.venue
+      };
+    }
+  }
+}
+
+ui {
+  forms {
+    form ExecutionEntry(Execution) {
+      field execId       : text   bind execId;
+      field orderId      : text   bind orderId;
+      field instrumentId : text   bind instrumentId;
+      field qty          : number bind qty;
+      field price        : money  bind price;
+      field tradeDate    : date   bind tradeDate;
+
+      must qty > 0;
+      must price > 0;
+
+      action Submit : submit -> ExecutionFeed;
+    };
+  }
+
+  grids {
+    grid ExecutionsGrid(Execution) {
+      source : table Executions;
+      column execId       : text;
+      column orderId      : text;
+      column instrumentId : text;
+      column qty          : number;
+      column price        : money;
+      column tradeDate    : date;
+      defaultSort : tradeDate desc;
+      filterable  : true;
+    };
+  }
+}
+
+```
+
+
+```
+
+
+
 
 # Investment Banking Trade Processing Requirements (RQE-Core)
 
