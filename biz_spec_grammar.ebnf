@@ -1,12 +1,24 @@
 (* ============================================================
-   RQE-Core 1.1 — Portable EBNF (designed to translate to ANTLR4 + tree-sitter)
-   - Statements terminated with ';'
-   - Blocks use '{ }'
-   - Queries are function-form (easy for both parsers)
-   - Adds: system bindings (via), finance predefined types, functions
+   RQE-Core 1.2 — Portable EBNF (sectioned; ANTLR4 + tree-sitter friendly)
+
+   Level B sections:
+   - Sections are syntactic containers that RESTRICT what appears inside.
+   - Cross-section references/consistency are enforced semantically (validator).
+
+   Statements:
+   - Most declarations end with ';'
+   - Rule blocks use '{ }'
+   - Queries are function-form
+
+   Comments (language-level):
+   - Line comments:   // ... EOL
+   - Block comments:  /* ... */
+   - Optional:        (* ... *)   (if you want to keep it)
    ============================================================ *)
 
-(* ---------- Lexical tokens (informative; implement in lexer) ---------- *)
+(* ------------------------------------------------------------
+   Lexical tokens (informative; implement in lexer)
+   ------------------------------------------------------------ *)
 IDENT   = ? [A-Za-z_][A-Za-z0-9_]* ? ;
 INT     = ? [0-9]+ ? ;
 DEC     = ? [0-9]+ "." [0-9]+ ? ;
@@ -16,22 +28,133 @@ BOOL    = "true" | "false" ;
 (* Optional literal for yyyymmdd; if you add this token, you can allow YYYYMMDD literals. *)
 DATE8   = ? [0-9]{8} ? ;
 
-(* ---------- Program ---------- *)
-program     = { decl } ;
+(* Comments & whitespace (lexer should skip/ignore them) *)
+LINE_COMMENT  = ? "//" [^\n\r]* ? ;
+BLOCK_COMMENT = ? "/*" ( . | "\n" )* "*/" ? ;
+PAREN_COMMENT = ? "(*" ( . | "\n" )* "*)" ? ;   (* optional *)
+WS            = ? [ \t\r\n]+ ? ;
 
-decl        = type_alias
-            | enum_decl
-            | record_decl
-            | message_decl
-            | table_decl
-            | system_decl
-            | channel_decl
-            | api_decl
-            | delivery_decl
-            | schedule_decl
-            | function_decl
-            | rule_decl
-            ;
+(* ------------------------------------------------------------
+   Program = sequence of sections (preferred) and/or legacy decls
+   ------------------------------------------------------------ *)
+program   = { top_item } ;
+
+top_item  = section | decl ;
+(* Keeping decl here gives backwards compatibility; validator can warn if used. *)
+
+(* ============================================================
+   Sections (keyworded)
+   ============================================================ *)
+
+section   = data_dictionary_section
+          | communications_section
+          | rules_section
+          | ui_section
+          ;
+
+(* -------------------- Data Dictionary -------------------- *)
+data_dictionary_section =
+  "data", "dictionary", "{", { dd_item }, "}" ;
+
+dd_item   = type_alias
+          | enum_decl
+          | record_decl
+          | message_decl
+          | table_decl
+          | function_decl
+          ;
+
+(* -------------------- Communications -------------------- *)
+communications_section =
+  "communications", "{", { comms_item }, "}" ;
+
+comms_item = comms_systems_subsection
+           | comms_channels_subsection
+           | comms_apis_subsection
+           | comms_delivery_subsection
+           ;
+
+comms_systems_subsection =
+  "systems", "{", { system_decl }, "}" ;
+
+comms_channels_subsection =
+  "channels", "{", { channel_decl }, "}" ;
+
+comms_apis_subsection =
+  "apis", "{", { api_decl }, "}" ;
+
+comms_delivery_subsection =
+  "delivery", "{", { delivery_decl }, "}" ;
+
+(* -------------------- Rules -------------------- *)
+rules_section =
+  "rules", "{", { rules_item }, "}" ;
+
+rules_item = rules_logic_subsection
+           | rules_timing_subsection
+           ;
+
+rules_logic_subsection =
+  "logic", "{", { rules_logic_item }, "}" ;
+
+rules_logic_item =
+    function_decl
+  | rule_decl
+  ;
+
+rules_timing_subsection =
+  "timing", "{", { rules_timing_item }, "}" ;
+
+rules_timing_item =
+    schedule_decl
+  | rule_timing_decl
+  ;
+
+(* Timing metadata for a rule (section-level, not inside rule block) *)
+rule_timing_decl =
+  "rule", IDENT, "timing", "{", { rule_timing_prop, ";" }, "}", ";" ;
+
+rule_timing_prop =
+    "sla",     ":", duration
+  | "timeout", ":", duration
+  | "maxLag",  ":", duration
+  | "runOn",   ":", IDENT         (* refers to a schedule name or a clock id *)
+  ;
+
+(* -------------------- UI -------------------- *)
+ui_section =
+  "ui", "{", { ui_item }, "}" ;
+
+ui_item   = ui_forms_subsection
+          | ui_grids_subsection
+          ;
+
+ui_forms_subsection =
+  "forms", "{", { form_decl }, "}" ;
+
+ui_grids_subsection =
+  "grids", "{", { grid_decl }, "}" ;
+
+
+(* ============================================================
+   Declarations (legacy top-level support + reused inside sections)
+   ============================================================ *)
+
+decl      = type_alias
+          | enum_decl
+          | record_decl
+          | message_decl
+          | table_decl
+          | system_decl
+          | channel_decl
+          | api_decl
+          | delivery_decl
+          | schedule_decl
+          | function_decl
+          | rule_decl
+          | form_decl
+          | grid_decl
+          ;
 
 (* ============================================================
    Types
@@ -40,9 +163,12 @@ type_alias   = "type", IDENT, "=", type, ";" ;
 enum_decl    = "enum", IDENT, "=", STRING, { "|", STRING }, ";" ;
 
 record_decl  = "type", IDENT, "=", record_type, ";" ;
+
+(* message Name.v1 = { ... }; *)
 message_decl = "message", IDENT, ".", "v", INT, "=", record_type, ";" ;
 
 type         = type_atom, [ "?" ] ;
+
 type_atom    = prim_type
             | finance_type
             | IDENT
@@ -55,7 +181,6 @@ prim_type    = "String" | "Int" | "Boolean" | "UUID" | "Date" | "Timestamp"
             | "Decimal", "(", INT, ",", INT, ")"
             ;
 
-(* Predefined finance/IB semantic types (built-ins recognized by type checker) *)
 finance_type = "Money" | "Amount" | "Price" | "Qty" | "Notional"
             | "Percent" | "Rate" | "BasisPoints" | "Ratio"
             | "Multiplier" | "IndexFactor"
@@ -75,17 +200,41 @@ type_ref     = IDENT | record_type ;
    ============================================================ *)
 table_decl   = IDENT, ":", "Table", "[", type_ref, "]", ";" ;
 
-(* Systems define external connectors that channels/APIs bind to. *)
-system_decl  = "system", IDENT, "=", system_kind, "{", { system_prop, ";" }, "}", ";" ;
+system_decl  = "system", IDENT, "=", system_kind,
+               "{", { system_prop, ";" }, "}", ";" ;
+
 system_kind  = "kafka" | "amqp" | "mq" | "fix" | "http" | IDENT ;
 system_prop  = IDENT, ":", STRING ;
 
-channel_decl = "channel", IDENT, "=", ("topic" | "queue"), "(", STRING, ")", "via", IDENT, ";" ;
+(* Enhanced channel: optional inline contract describing protocol/format/etc *)
+channel_decl = "channel", IDENT, "=",
+               ("topic" | "queue"), "(", STRING, ")",
+               "via", IDENT,
+               [ channel_contract ],
+               ";" ;
+
+channel_contract = "{", { channel_prop, ";" }, "}" ;
+
+channel_prop = "protocol", ":", ( "kafka" | "amqp" | "mq" | "fix" | "http" | IDENT )
+             | "format",   ":", ( "json" | "avro" | "protobuf" | "fix" | "csv" | IDENT )
+             | "key",      ":", IDENT
+             | "schema",   ":", STRING
+             | "message",  ":", message_ref
+             ;
+
+(* references message identifiers as Name.vN *)
+message_ref  = qident, ".", "v", INT ;
 
 api_decl     = "api", IDENT, "=", "http", "via", IDENT, "{", { api_item }, "}" ;
+
 api_item     = "baseUrl", ":", STRING, ";"
-            | "endpoint", http_method, STRING, "(", type_ref, ")", "->", (INT | type_ref), ";"
+            | "endpoint", http_method, STRING, "(", type_ref, ")", "->", api_response, ";"
             | "auth", ":", auth_spec, ";"
+            ;
+
+(* Keep response minimal but future-proof: status code w/ optional body type *)
+api_response = INT, [ "(", type_ref, ")" ]
+            | type_ref
             ;
 
 http_method  = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" ;
@@ -95,14 +244,19 @@ auth_spec    = "mTLS" | ("OAuth2", "(", IDENT, ")") | IDENT ;
    Delivery / Schedule
    ============================================================ *)
 delivery_decl   = "delivery", delivery_target, ":", "{", { delivery_prop, ";" }, "}" ;
-delivery_target = IDENT | (IDENT, ".", http_method, STRING) ;
+
+delivery_target = IDENT
+               | (IDENT, ".", http_method, STRING)
+               ;
 
 delivery_prop = "semantics", ":", ("at-least-once" | "at-most-once")
               | "dedupeKey", ":", IDENT
               | "idempotencyKey", ":", IDENT
               | "dedupeWindow", ":", duration
-              | "retry", ":", "exponentialBackoff", "(", "max", "=", INT,
-                    [ ",", "maxDelay", "=", duration ], ")"
+              | "retry", ":", "exponentialBackoff",
+                    "(", "max", "=", INT,
+                        [ ",", "maxDelay", "=", duration ],
+                    ")"
               ;
 
 duration     = INT, ("s" | "m" | "h" | "d") ;
@@ -111,7 +265,6 @@ schedule_decl = "schedule", IDENT, ":", "every", duration, ";" ;
 
 (* ============================================================
    Functions (built-ins or user-declared signatures)
-   - You can treat built-ins as preloaded declarations.
    ============================================================ *)
 function_decl = "function", qident, "(", [ param_list ], ")", ":", type, ";" ;
 param_list    = param, { ",", param } ;
@@ -121,6 +274,7 @@ param         = IDENT, ":", type ;
    Rules / Statements
    ============================================================ *)
 rule_decl    = "rule", IDENT, ":", block ;
+
 block        = "{", { stmt }, "}" ;
 
 stmt         = when_stmt
@@ -133,6 +287,7 @@ stmt         = when_stmt
             ;
 
 when_stmt    = "when", trigger, ";" ;
+
 trigger      = IDENT, "receives", IDENT, ":", type_ref
             | IDENT, "as", IDENT, ("created" | "updated" | "ingested")
             | "clock", IDENT
@@ -150,18 +305,22 @@ if_stmt      = "if", expr, block, [ "else", block ] ;
 for_each_stmt= "for", "each", IDENT, "in", expr, block ;
 
 do_stmt      = "do", action, ";" ;
+
 action       = publish | call | upsert | set_stmt | create ;
 
 publish      = "publish", IDENT, "<-", construct ;
 call         = "call", IDENT, ".", http_method, STRING, "<-", construct ;
 
 upsert       = "upsert", IDENT, "by", IDENT, "=", expr, "with", expr ;
+
 set_stmt     = "set", lvalue, "=", expr ;
 lvalue       = IDENT | (IDENT, ".", IDENT) ;
 
+(* Require space between type_ref and '{' in implementation; grammar allows it naturally *)
 create       = "create", type_ref, construct_body ;
 
 construct    = type_ref, construct_body ;
+
 construct_body = "{", [ field_assign, { ",", field_assign } ], "}" ;
 field_assign = IDENT, "=", expr ;
 
@@ -175,11 +334,14 @@ query        = filter_q | join_q | group_q | sort_q | take_q | select_q ;
 filter_q     = "filter", "(", IDENT, ",", IDENT, ",", expr, ")" ;
 (* filter(TableName, rowAlias, predicate) *)
 
-join_q       = ("join" | "leftJoin"), "(", IDENT, ",", IDENT, ",", IDENT, ",", IDENT, ",",
-                expr, [ ",", expr ], ")" ;
+join_q       = ("join" | "leftJoin"),
+               "(", IDENT, ",", IDENT, ",", IDENT, ",", IDENT, ",",
+                    expr, [ ",", expr ],
+               ")" ;
 (* join(L, lAlias, R, rAlias, onExpr [, whereExpr]) *)
 
-group_q      = "group", "(", query, ",", IDENT, ",", expr_list, ",", agg_list, ")" ;
+group_q      = "group",
+               "(", query, ",", IDENT, ",", expr_list, ",", agg_list, ")" ;
 (* group(query, rowAlias, keyExprList, aggList) *)
 
 sort_q       = "sort", "(", query, ",", expr, ",", ("asc" | "desc"), ")" ;
@@ -215,163 +377,4 @@ primary      = literal
 qident       = IDENT, { ".", IDENT } ;
 
 literal      = STRING | INT | DEC | BOOL | date8_lit ;
-date8_lit    = DATE8 ;  (* optional: if lexer provides DATE8; otherwise use INT+validation or parseYYYYMMDD(INT) *)
-
-
-
-(* ============================================================
-   Program is a sequence of named sections
-   ============================================================ *)
-
-program     = { section } ;
-
-section     = data_dictionary_section
-            | rules_section
-            | communications_section
-            | ui_section
-            ;
-
-(* -------------------- Data Dictionary -------------------- *)
-data_dictionary_section =
-  "data", "dictionary", "{", { dd_item }, "}" ;
-
-dd_item     = type_alias
-            | enum_decl
-            | record_decl
-            | message_decl
-            | table_decl
-            | function_decl
-            ;
-
-(* -------------------- Rules -------------------- *)
-rules_section =
-  "rules", "{", { rules_item }, "}" ;
-
-rules_item  = rules_logic_subsection
-            | rules_timing_subsection
-            | rule_decl
-            | function_decl
-            | schedule_decl
-            ;
-
-rules_logic_subsection =
-  "logic", "{", { rule_decl | function_decl }, "}" ;
-
-rules_timing_subsection =
-  "timing", "{", { schedule_decl | rule_timing_decl }, "}" ;
-
-rule_timing_decl =
-  "rule", IDENT, "timing", "{", { rule_timing_prop, ";" }, "}", ";" ;
-
-rule_timing_prop =
-    "sla", ":", duration
-  | "timeout", ":", duration
-  | "maxLag", ":", duration
-  | "runOn", ":", IDENT
-  ;
-
-(* -------------------- Communications -------------------- *)
-communications_section =
-  "communications", "{", { comms_item }, "}" ;
-
-comms_item  = comms_channels_subsection
-            | comms_systems_subsection
-            | comms_apis_subsection
-            | comms_delivery_subsection
-            | channel_decl
-            | system_decl
-            | api_decl
-            | delivery_decl
-            | message_decl
-            ;
-
-comms_channels_subsection =
-  "channels", "{", { channel_decl }, "}" ;
-
-comms_systems_subsection =
-  "systems", "{", { system_decl }, "}" ;
-
-comms_apis_subsection =
-  "apis", "{", { api_decl }, "}" ;
-
-comms_delivery_subsection =
-  "delivery", "{", { delivery_decl }, "}" ;
-
-(* Enhanced channel: protocol/format/messages live in an optional inline block *)
-channel_decl =
-  "channel", IDENT, "=", ("topic" | "queue"), "(", STRING, ")",
-  "via", IDENT,
-  [ channel_contract ],
-  ";" ;
-
-channel_contract =
-  "{", { channel_prop, ";" }, "}" ;
-
-channel_prop =
-    "protocol", ":", ( "kafka" | "amqp" | "mq" | "fix" | "http" | IDENT )
-  | "format",   ":", ( "json" | "avro" | "protobuf" | "fix" | "csv" | IDENT )
-  | "key",      ":", IDENT
-  | "message",  ":", qident, [ ".v", INT ]
-  | "schema",   ":", STRING
-  ;
-
-(* -------------------- UI -------------------- *)
-ui_section =
-  "ui", "{", { ui_item }, "}" ;
-
-ui_item     = ui_forms_subsection
-            | ui_grids_subsection
-            | form_decl
-            | grid_decl
-            ;
-
-ui_forms_subsection =
-  "forms", "{", { form_decl }, "}" ;
-
-ui_grids_subsection =
-  "grids", "{", { grid_decl }, "}" ;
-
-form_decl =
-  "form", IDENT, "(", type_ref, ")", "{", { form_item }, "}", ";" ;
-
-form_item   = ui_field
-            | ui_action
-            | must_stmt     (* reuse existing must/else block for UI validation *)
-            ;
-
-ui_field    =
-  "field", IDENT, ":", widget_spec, [ "bind", binding ], ";" ;
-
-widget_spec =
-    "text"
-  | "number"
-  | "money"
-  | "date"
-  | "checkbox"
-  | "select", "(", select_source, ")"
-  ;
-
-select_source =
-    "enum", IDENT
-  | "query", "(", query, ")"
-  ;
-
-binding     = IDENT | (IDENT, ".", IDENT) ;
-
-ui_action   =
-  "action", IDENT, ":", ("submit" | "reset" | "navigate"),
-  [ "->", ui_target ], ";" ;
-
-ui_target   = IDENT | (IDENT, ".", http_method, STRING) ;
-
-grid_decl =
-  "grid", IDENT, "(", type_ref, ")", "{", { grid_item }, "}", ";" ;
-
-grid_item   =
-    "source", ":", ("table", IDENT | "query", "(", query, ")"), ";"
-  | "column", IDENT, ":", column_spec, ";"
-  | "defaultSort", ":", IDENT, ("asc" | "desc"), ";"
-  | "filterable", ":", BOOL, ";"
-  ;
-
-column_spec = "text" | "number" | "money" | "date" | ("enum", IDENT) ;
+date8_lit    = DATE8 ;
