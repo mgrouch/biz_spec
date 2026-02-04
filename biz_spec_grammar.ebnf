@@ -216,3 +216,162 @@ qident       = IDENT, { ".", IDENT } ;
 
 literal      = STRING | INT | DEC | BOOL | date8_lit ;
 date8_lit    = DATE8 ;  (* optional: if lexer provides DATE8; otherwise use INT+validation or parseYYYYMMDD(INT) *)
+
+
+
+(* ============================================================
+   Program is a sequence of named sections
+   ============================================================ *)
+
+program     = { section } ;
+
+section     = data_dictionary_section
+            | rules_section
+            | communications_section
+            | ui_section
+            ;
+
+(* -------------------- Data Dictionary -------------------- *)
+data_dictionary_section =
+  "data", "dictionary", "{", { dd_item }, "}" ;
+
+dd_item     = type_alias
+            | enum_decl
+            | record_decl
+            | message_decl
+            | table_decl
+            | function_decl
+            ;
+
+(* -------------------- Rules -------------------- *)
+rules_section =
+  "rules", "{", { rules_item }, "}" ;
+
+rules_item  = rules_logic_subsection
+            | rules_timing_subsection
+            | rule_decl
+            | function_decl
+            | schedule_decl
+            ;
+
+rules_logic_subsection =
+  "logic", "{", { rule_decl | function_decl }, "}" ;
+
+rules_timing_subsection =
+  "timing", "{", { schedule_decl | rule_timing_decl }, "}" ;
+
+rule_timing_decl =
+  "rule", IDENT, "timing", "{", { rule_timing_prop, ";" }, "}", ";" ;
+
+rule_timing_prop =
+    "sla", ":", duration
+  | "timeout", ":", duration
+  | "maxLag", ":", duration
+  | "runOn", ":", IDENT
+  ;
+
+(* -------------------- Communications -------------------- *)
+communications_section =
+  "communications", "{", { comms_item }, "}" ;
+
+comms_item  = comms_channels_subsection
+            | comms_systems_subsection
+            | comms_apis_subsection
+            | comms_delivery_subsection
+            | channel_decl
+            | system_decl
+            | api_decl
+            | delivery_decl
+            | message_decl
+            ;
+
+comms_channels_subsection =
+  "channels", "{", { channel_decl }, "}" ;
+
+comms_systems_subsection =
+  "systems", "{", { system_decl }, "}" ;
+
+comms_apis_subsection =
+  "apis", "{", { api_decl }, "}" ;
+
+comms_delivery_subsection =
+  "delivery", "{", { delivery_decl }, "}" ;
+
+(* Enhanced channel: protocol/format/messages live in an optional inline block *)
+channel_decl =
+  "channel", IDENT, "=", ("topic" | "queue"), "(", STRING, ")",
+  "via", IDENT,
+  [ channel_contract ],
+  ";" ;
+
+channel_contract =
+  "{", { channel_prop, ";" }, "}" ;
+
+channel_prop =
+    "protocol", ":", ( "kafka" | "amqp" | "mq" | "fix" | "http" | IDENT )
+  | "format",   ":", ( "json" | "avro" | "protobuf" | "fix" | "csv" | IDENT )
+  | "key",      ":", IDENT
+  | "message",  ":", qident, [ ".v", INT ]
+  | "schema",   ":", STRING
+  ;
+
+(* -------------------- UI -------------------- *)
+ui_section =
+  "ui", "{", { ui_item }, "}" ;
+
+ui_item     = ui_forms_subsection
+            | ui_grids_subsection
+            | form_decl
+            | grid_decl
+            ;
+
+ui_forms_subsection =
+  "forms", "{", { form_decl }, "}" ;
+
+ui_grids_subsection =
+  "grids", "{", { grid_decl }, "}" ;
+
+form_decl =
+  "form", IDENT, "(", type_ref, ")", "{", { form_item }, "}", ";" ;
+
+form_item   = ui_field
+            | ui_action
+            | must_stmt     (* reuse existing must/else block for UI validation *)
+            ;
+
+ui_field    =
+  "field", IDENT, ":", widget_spec, [ "bind", binding ], ";" ;
+
+widget_spec =
+    "text"
+  | "number"
+  | "money"
+  | "date"
+  | "checkbox"
+  | "select", "(", select_source, ")"
+  ;
+
+select_source =
+    "enum", IDENT
+  | "query", "(", query, ")"
+  ;
+
+binding     = IDENT | (IDENT, ".", IDENT) ;
+
+ui_action   =
+  "action", IDENT, ":", ("submit" | "reset" | "navigate"),
+  [ "->", ui_target ], ";" ;
+
+ui_target   = IDENT | (IDENT, ".", http_method, STRING) ;
+
+grid_decl =
+  "grid", IDENT, "(", type_ref, ")", "{", { grid_item }, "}", ";" ;
+
+grid_item   =
+    "source", ":", ("table", IDENT | "query", "(", query, ")"), ";"
+  | "column", IDENT, ":", column_spec, ";"
+  | "defaultSort", ":", IDENT, ("asc" | "desc"), ";"
+  | "filterable", ":", BOOL, ";"
+  ;
+
+column_spec = "text" | "number" | "money" | "date" | ("enum", IDENT) ;
