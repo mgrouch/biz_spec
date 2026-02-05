@@ -1,0 +1,628 @@
+\documentclass[sigconf]{acmart}
+
+% ===================== Packages =====================
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+\usepackage{makecell}
+\usepackage{array}
+\usepackage{tabularx}
+
+% ===================== Metadata =====================
+\title{A Complete State--Transition Reconstruction of Continuous Net Settlement}
+\author{Mikhail Grushinskiy} 
+\date{}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{remark}{Remark}
+
+% Hide the “ACM Reference Format” block
+\settopmatter{printacmref=false}
+
+% Hide the permission/copyright footnote block
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+\acmDOI{}
+\acmISBN{}
+\acmPrice{}
+\acmConference{}{}{}
+\acmBooktitle{}
+\acmYear{}
+
+\begin{document}
+
+% ===================== ABSTRACT =====================
+\begin{abstract}
+Continuous Net Settlement (CNS) is a multilateral clearing mechanism that replaces bilateral securities settlement with rolling net obligations against a central counterparty. Although CNS is widely used in production markets, its algorithmic structure is rarely described in formal terms. This paper presents a complete mathematical reconstruction of CNS as a discrete-time state--transition system. The model includes novation, multilateral netting, rolling fail carry, capacity-constrained settlement, deterministic priority-based allocation, purely randomized allocation, and probabilistic priority-biased allocation. Cash settlement is modeled symmetrically. All intermediate variables are defined explicitly, invariants are stated, and a fully worked multi-day numerical example illustrates the behavior of the system under different allocation policies. The formalization enables rigorous analysis, simulation, and comparison with alternative settlement architectures.
+\end{abstract}
+
+\maketitle
+
+% ===================== INTRODUCTION =====================
+\section{Introduction}
+Large-scale securities markets require settlement systems that minimize liquidity usage, operational complexity, and counterparty risk. Continuous Net Settlement (CNS) achieves these goals by aggregating trades across participants and time into rolling net obligations cleared against a central counterparty. CNS-style multilateral netting and rolling settlement mechanisms were developed over decades as part of post-trade infrastructure modernization; in the U.S. equities context, CNS is associated with NSCC/DTCC clearing workflows. In general, multilateral netting can reduce settlement activity substantially relative to gross settlement, while enabling centralized risk management by a clearing organization.
+Despite its operational importance, public descriptions of CNS emphasize procedural flow rather than formal structure. Academic literature often treats CNS as a black box, focusing on economic outcomes rather than algorithmic mechanics. This paper fills this gap by reconstructing CNS as a precise mathematical object---a labeled transition system with explicit state variables, transition rules, and allocation policies.
+
+\paragraph{Contributions.}
+We provide: (1) a complete mathematical model of CNS as a discrete-time state machine, (2) explicit definitions of all intermediate variables and transitions, (3) three allocation policies formalized within a unified framework, (4) conservation laws and invariants, and (5) a worked multi-day example demonstrating system dynamics under different policies.
+
+\paragraph{Applications.}
+The formal model supports simulation studies, formal verification of safety properties, comparative analysis with alternative mechanisms (e.g., real-time gross settlement, distributed ledger systems), and sensitivity analysis of policy parameters. It also provides a foundation for reasoning about settlement system design choices (e.g., allocation fairness vs.\ aging vs.\ risk penalties).
+
+% ===================== SETS & TIME =====================
+\section{Sets, Time, and Sign Conventions}
+Let:
+\begin{itemize}[leftmargin=*]
+\item $P = \{1, 2, \dots, m\}$ be a finite set of participants (brokers, custodians, banks).
+\item $S = \{1, 2, \dots, n\}$ be a finite set of securities (equities, bonds, etc.).
+\item $t \in \mathbb{N} = \{0, 1, 2, \dots\}$ index discrete settlement cycles, typically corresponding to business days. Cycle $t$ begins at time $t$ and ends before $t+1$.
+\end{itemize}
+
+\subsection{Sign Conventions}
+The sign conventions follow the \emph{participant-centric} viewpoint:
+\begin{itemize}[leftmargin=*]
+\item For share obligations $X_t(p,s) \in \mathbb{Z}$:
+  \begin{itemize}
+  \item $X_t(p,s) > 0$: \textbf{CNS owes} $|X_t(p,s)|$ shares of security $s$ to participant $p$.
+  \item $X_t(p,s) < 0$: \textbf{Participant $p$ owes} $|X_t(p,s)|$ shares of $s$ to CNS.
+  \end{itemize}
+
+\item For cash obligations $C_t(p) \in \mathbb{R}$:
+  \begin{itemize}
+  \item $C_t(p) > 0$: \textbf{CNS owes} $\$|C_t(p)|$ to participant $p$.
+  \item $C_t(p) < 0$: \textbf{Participant $p$ owes} $\$|C_t(p)|$ to CNS.
+  \end{itemize}
+\end{itemize}
+These conventions ensure that a participant with positive net position receives from the system, while a participant with negative net position must deliver to the system.
+
+\begin{remark}
+For a closed system with matched trades and consistent valuation conventions, the clearing entity has zero net position:
+$\sum_{p\in P} X_t(p,s) = 0$ for each $s$ and, when the cash legs are fully included and balanced, $\sum_{p\in P} C_t(p) = 0$.
+In practice, temporary imbalances may appear due to timing, corporate actions, haircutting/rounding conventions, or incomplete cash/funding, but the model below captures the intended accounting identities.
+\end{remark}
+
+% ===================== TRADE INPUT =====================
+\section{Trade Input Model}
+At the beginning of cycle $t$, the system receives a multiset of \emph{eligible trades}:
+\[
+E_t \subseteq P \times S \times \mathbb{Z} \times \mathbb{R}.
+\]
+Each trade is a tuple $u = (p, s, q, \pi)$ where:
+\begin{itemize}[leftmargin=*]
+\item $p \in P$: buying (if $q > 0$) or selling (if $q < 0$) participant
+\item $s \in S$: security identifier
+\item $q \in \mathbb{Z} \setminus \{0\}$: signed quantity (positive for buy, negative for sell)
+\item $\pi \in \mathbb{R}_{>0}$: trade price per share
+\end{itemize}
+
+\subsection{Trade Validation and Matching}
+We abstract away trade matching and validation, assuming $E_t$ contains only \emph{validated, matched trades}. In practice, trades undergo:
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Matching}: Buyer and seller confirm trade details
+\item \textbf{Validation}: Checking of participant eligibility, security status, etc.
+\item \textbf{Novation}: Legal transfer of counterparty rights to the CCP/clearing entity
+\end{enumerate}
+
+\begin{remark}
+Trade input $E_t$ typically excludes trades that fail validation or are submitted after cutoff times. These may enter subsequent cycles or be handled through exception processes.
+\end{remark}
+
+% ===================== STATE =====================
+\section{State Variables}
+The CNS state at time $t$ is a tuple:
+\[
+\sigma_t = \bigl(X_t, C_t, M_t, B_t, \Theta\bigr)
+\]
+where:
+
+\subsection{Core Obligation Variables}
+\begin{itemize}[leftmargin=*]
+\item $X_t : P \times S \to \mathbb{Z}$ — open net share obligations. Entry $X_t(p,s)$ represents the net number of shares of security $s$ that participant $p$ must receive from (if positive) or deliver to (if negative) CNS.
+\item $C_t : P \to \mathbb{R}$ — open net cash obligations. Entry $C_t(p)$ represents the net cash amount that participant $p$ must receive from (if positive) or pay to (if negative) CNS.
+\end{itemize}
+
+\subsection{Risk and Control Variables}
+\begin{itemize}[leftmargin=*]
+\item $M_t : P \to \mathbb{R}_{\ge 0}$ — risk or margin capacity. Represents the participant's available collateral or credit limit for settling obligations (abstractly).
+\item $B_t : P \times S \to \{0,1\}$ — block/hold indicators. $B_t(p,s)=1$ indicates that obligations for participant $p$ and security $s$ are temporarily blocked from settlement (e.g., due to operational issues, corporate actions, or holds).
+\end{itemize}
+
+\subsection{Configuration Parameters}
+$\Theta$ represents system configuration:
+\begin{itemize}[leftmargin=*]
+\item $\text{LotSize}(s) \in \mathbb{N}^+$: minimum allocation unit (often 1; sometimes 100 shares by convention; policy-dependent)
+\item $\text{PriorityWeights} = \{\alpha_i\}$: weights for allocation scoring
+\item $\text{WindowSize} = W \in \mathbb{N}$: lookback window for fail history
+\item $\text{MarginFactors}$: parameters used for $M_t$ updates (abstract)
+\item $\text{BlockRules}$: rules for setting $B_t$ (abstract)
+\end{itemize}
+
+\subsection{Continuous Semantics}
+A key feature of CNS is its \emph{continuous} nature: unsettled obligations persist across cycles without expiration (absent corporate actions or forced closeouts). Thus:
+\[
+X_{t+1} \text{ begins from the post-settlement state } X_t^{(3)}.
+\]
+
+% ===================== LTS =====================
+\section{Labeled Transition System}
+CNS is formally modeled as a labeled transition system (LTS):
+\[
+\text{TS} = (\mathcal{S}, \mathcal{A}, \rightarrow, \sigma_0)
+\]
+where:
+\begin{itemize}[leftmargin=*]
+\item $\mathcal{S}$: set of all possible states $\sigma_t$
+\item $\mathcal{A}$: set of action labels (transition inputs)
+\item $\rightarrow \subseteq \mathcal{S} \times \mathcal{A} \times \mathcal{S}$: transition relation
+\item $\sigma_0$: initial state (typically all zeros)
+\end{itemize}
+
+Each transition $\sigma_t \xrightarrow{a_t} \sigma_{t+1}$ is labeled by an action:
+\[
+a_t = \bigl(E_t, D_t, K_t, \Pi_t\bigr)
+\]
+where:
+\begin{itemize}[leftmargin=*]
+\item $E_t$: eligible trades
+\item $D_t : P \times S \to \mathbb{Z}_{\ge 0}$: deliverable share capacity---maximum shares participant $p$ can deliver of security $s$ in cycle $t$
+\item $K_t : P \to \mathbb{R}_{\ge 0}$: cash payment capacity---maximum cash participant $p$ can pay in cycle $t$
+\item $\Pi_t$: valuation conventions for corporate actions, dividends, rounding, etc.
+\end{itemize}
+
+\begin{remark}
+$D_t$ and $K_t$ represent \emph{capacity constraints} that may arise from liquidity limits, inventory/borrow constraints, operational capability, or policy. They are exogenous inputs to the settlement process.
+\end{remark}
+
+% ===================== TRANSITION OVERVIEW =====================
+\section{Transition Steps: Overview}
+Each settlement cycle executes four sequential steps:
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Step A: Novation and Multilateral Netting} — aggregate new trades with existing obligations
+\item \textbf{Step B: Admissibility and Risk Controls} — apply risk checks and blocks
+\item \textbf{Step C: Settlement} — execute share and cash settlement subject to capacity constraints
+\item \textbf{Step D: Roll Forward} — carry unsettled obligations to next cycle
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.93\columnwidth}{
+\textbf{Transition Flow:}
+\begin{enumerate}[leftmargin=*]
+\item Start: $\sigma_t = (X_t, C_t, M_t, B_t, \Theta)$
+\item Step A: $(X_t, C_t) \rightarrow (X^{(1)}_t, C^{(1)}_t)$ via trade netting
+\item Step B: $(X^{(1)}_t, C^{(1)}_t, M_t, B_t) \rightarrow (X^{(2)}_t, C^{(2)}_t, M_{t+1}, B_{t+1})$ via controls
+\item Step C (Shares): $X^{(2)}_t \rightarrow X^{(3a)}_t$ via deliveries $\rightarrow X^{(3)}_t$ via allocations
+\item Step C (Cash): $C^{(2)}_t \rightarrow C^{(3)}_t$ via payments and receipts
+\item Step D: $X_{t+1} = X^{(3)}_t$, $C_{t+1} = C^{(3)}_t$
+\end{enumerate}
+}}
+\caption{State transition flow through one settlement cycle}
+\label{fig:transition-flow}
+\end{figure}
+
+% ===================== STEP A =====================
+\section{Step A: Novation and Multilateral Netting}
+\subsection{Trade-Induced Flows}
+For each participant $p$ and security $s$, compute the net trade flow:
+\[
+\Delta X^{tr}_t(p,s) =
+\sum_{\substack{(p',s',q,\pi)\in E_t \\ (p',s')=(p,s)}} q.
+\]
+The corresponding cash flow (from the participant's perspective) is:
+\[
+\Delta C^{tr}_t(p) =
+\sum_{\substack{(p',s',q,\pi)\in E_t \\ p'=p}} (-q\pi).
+\]
+When $q>0$ (buy), the participant pays $q\pi$ so cash decreases; when $q<0$ (sell), the participant receives $|q|\pi$ so cash increases.
+
+\subsection{Post-Netting Obligations}
+Update obligations by adding trade flows:
+\begin{align*}
+X^{(1)}_t(p,s) &= X_t(p,s) + \Delta X^{tr}_t(p,s) \quad \forall p\in P, s\in S, \\
+C^{(1)}_t(p) &= C_t(p) + \Delta C^{tr}_t(p) \quad \forall p\in P.
+\end{align*}
+
+\begin{proposition}[Share Conservation]
+If initial obligations are balanced ($\sum_{p\in P} X_0(p,s) = 0$ for all $s$) and trades are matched
+($\sum_{p\in P} \Delta X^{tr}_t(p,s) = 0$ for all $s, t$), then:
+\[
+\sum_{p\in P} X_t(p,s) = 0 \quad \forall s\in S, t\in\mathbb{N}.
+\]
+\end{proposition}
+
+\begin{proof}
+By induction: base case holds by assumption. If $\sum_p X_t(p,s)=0$ and $\sum_p \Delta X^{tr}_t(p,s)=0$, then $\sum_p X^{(1)}_t(p,s)=0$.
+Steps B--D only redistribute shares among participants (i.e., allocate delivered shares to receivers) and therefore preserve the per-security sum.
+\end{proof}
+
+\begin{corollary}[Cash Conservation Under Balanced Cash Legs]
+If $\sum_p C_0(p)=0$ and $\sum_p \Delta C^{tr}_t(p)=0$ for each $t$, then $\sum_p C_t(p)=0$ for all $t$.
+\end{corollary}
+
+% ===================== STEP B =====================
+\section{Step B: Admissibility and Risk Controls}
+After netting, the system applies risk controls and operational checks:
+\[
+\bigl(X^{(2)}_t, C^{(2)}_t, M_{t+1}, B_{t+1}\bigr) =
+g\bigl(X^{(1)}_t, C^{(1)}_t, M_t, B_t, \Theta\bigr),
+\]
+where $g$ may:
+\begin{itemize}[leftmargin=*]
+\item \textbf{freeze participants} (prevent new obligations from changing settlement behavior),
+\item \textbf{cap settlement quantities} (limit deliveries/receipts based on $M_t(p)$),
+\item \textbf{impose blocks} (e.g., $B_{t+1}(p,s)=1$),
+\item \textbf{apply throttles} (reduce effective settlement capacity under stress).
+\end{itemize}
+
+\begin{remark}
+The identity operator $g_{\text{id}}$ is a valid special case representing no risk controls. Production systems typically implement non-trivial controls to manage risk and operational constraints.
+\end{remark}
+
+% ===================== STEP C =====================
+\section{Step C: Settlement}
+Settlement occurs in two phases: share settlement and cash settlement.
+
+\subsection{Share Settlement: Delivery from Shorts}
+Participants with negative obligations (shorts) attempt to deliver shares to CNS. For each $(p,s)$:
+\begin{align*}
+\text{NeedDel}_t(p,s) &= \max\bigl(0, -X^{(2)}_t(p,s)\bigr),\\
+\text{Del}_t(p,s) &= \min\bigl(D_t(p,s),\; \text{NeedDel}_t(p,s)\bigr),\\
+X^{(3a)}_t(p,s) &= X^{(2)}_t(p,s) + \text{Del}_t(p,s).
+\end{align*}
+The total delivered shares for security $s$ is:
+\[
+\text{TotDel}_t(s) = \sum_{p\in P} \text{Del}_t(p,s).
+\]
+
+\subsection{Share Settlement: Allocation to Longs}
+Participants with positive obligations (longs) receive shares from CNS. Define:
+\[
+\text{NeedRec}_t(p,s) = \max\bigl(0, X^{(3a)}_t(p,s)\bigr).
+\]
+Choose receipts $\text{Rec}_t(p,s)$ subject to:
+\begin{align}
+0 &\le \text{Rec}_t(p,s) \le \text{NeedRec}_t(p,s), \label{eq:rec-bound}\\
+\sum_{p\in P} \text{Rec}_t(p,s) &= \text{TotDel}_t(s). \label{eq:rec-sum}
+\end{align}
+
+\subsection{Post-Settlement Obligations}
+After allocation:
+\[
+X^{(3)}_t(p,s) = X^{(3a)}_t(p,s) - \text{Rec}_t(p,s).
+\]
+
+\begin{proposition}[Per-Entry Magnitude Non-Increase Under Feasible Settlement]
+For each $(p,s)$, if $\text{Del}_t(p,s)\le \text{NeedDel}_t(p,s)$ and $\text{Rec}_t(p,s)\le \text{NeedRec}_t(p,s)$, then settlement does not push any obligation further away from zero in the \emph{same direction}:
+\[
+X^{(2)}_t(p,s)\le 0 \Rightarrow X^{(3)}_t(p,s)\ge X^{(2)}_t(p,s),\quad
+X^{(2)}_t(p,s)\ge 0 \Rightarrow X^{(3)}_t(p,s)\le X^{(2)}_t(p,s).
+\]
+Equivalently, shorts become less short (or unchanged) and longs become less long (or unchanged).
+\end{proposition}
+
+% ===================== ALLOCATION =====================
+\section{Allocation Policies}
+The allocation problem---choosing $\text{Rec}_t(\cdot,s)$ satisfying \eqref{eq:rec-bound}--\eqref{eq:rec-sum}---is underdetermined. We formalize three policy classes.
+
+\subsection{Deterministic Priority Allocation}
+
+\subsubsection{Aging}
+We define the ``age'' of an outstanding \emph{long} obligation. Let $\text{Age}_t(p,s)\in\mathbb{N}$ be updated as:
+\[
+\text{Age}_{t+1}(p,s)=
+\begin{cases}
+\text{Age}_t(p,s)+1, & \text{if } X^{(3)}_t(p,s)>0,\\
+0, & \text{if } X^{(3)}_t(p,s)=0,\\
+0, & \text{if } X^{(3)}_t(p,s)<0 \text{ (not a long)},
+\end{cases}
+\]
+with $\text{Age}_0(p,s)=0$.
+
+\subsubsection{Participant class and lot structure}
+Let $\text{Class}(p)\in\mathbb{N}$ (lower is higher priority). Let $\text{LotSize}(s)\in\mathbb{N}^+$.
+Define
+\[
+\text{RoundNeed}_t(p,s)=\left\lfloor\frac{\text{NeedRec}_t(p,s)}{\text{LotSize}(s)}\right\rfloor.
+\]
+
+\subsubsection{Chronic fail score (short-side penalty)}
+Participants with frequent delivery shortfalls can be deprioritized via a score computed from short obligations.
+For a lookback window $W$:
+\[
+\text{FailScore}_t(p) = \sum_{k=t-W}^{t-1} \sum_{s\in S} \mathbf{1}\{X_k(p,s) < 0\}.
+\]
+
+\subsubsection{Priority key and greedy allocation}
+Construct a priority key for each $(p,s)$ with $\text{NeedRec}_t(p,s) > 0$:
+\[
+\text{Key}_t(p,s) = \bigl(-\text{Age}_t(p,s),\; \text{Class}(p),\; -\text{RoundNeed}_t(p,s),\; \text{FailScore}_t(p),\; \text{TieID}(p)\bigr),
+\]
+compared lexicographically (ascending).
+Greedy allocation in this order with remaining supply $R\gets \text{TotDel}_t(s)$:
+\[
+\text{Rec}_t(p,s)=\min(\text{NeedRec}_t(p,s),R),\quad R\gets R-\text{Rec}_t(p,s),
+\]
+iterating in priority order until $R=0$.
+
+\subsection{Pure Randomized Allocation}
+Let $\mathcal{F}_t(s)$ be the set of all feasible allocations for security $s$:
+\[
+\mathcal{F}_t(s)=\left\{\text{Rec}_t(\cdot,s)\ :\ \eqref{eq:rec-bound},\eqref{eq:rec-sum}\ \text{hold}\right\}.
+\]
+Sample:
+\[
+\text{Rec}_t(\cdot,s) \sim \mu_{t,s}\quad \text{with support in }\mathcal{F}_t(s).
+\]
+\begin{remark}
+Uniform sampling over $\mathcal{F}_t(s)$ is conceptually clean but may be computationally expensive for large systems. Unit-by-unit random procedures are commonly used in practical randomized allocators.
+\end{remark}
+
+\subsection{Probabilistic Priority Allocation}
+This hybrid approach biases random allocation toward priority rules.
+
+\subsubsection{Components and score}
+Using the same information as the deterministic key, define components:
+\[
+k_1(p,s) = -\text{Age}_t(p,s),\quad
+k_2(p,s) = \text{Class}(p),\quad
+k_3(p,s) = -\text{RoundNeed}_t(p,s),\quad
+k_4(p,s) = \text{FailScore}_t(p).
+\]
+Define scalar score:
+\[
+\text{Score}_t(p,s)=\alpha_1 k_1(p,s)+\alpha_2 k_2(p,s)+\alpha_3 k_3(p,s)+\alpha_4 k_4(p,s),
+\]
+with weights $\alpha_i\ge 0$.
+
+\subsubsection{Softmax sampling probability}
+At each unit allocation step, among active receivers
+$A=\{p:\text{NeedRec}_t(p,s)-\text{Rec}_t(p,s)>0\}$,
+sample:
+\[
+\Pr(p) = \frac{e^{-\beta \cdot \text{Score}_t(p,s)}}{\sum_{j\in A} e^{-\beta \cdot \text{Score}_t(j,s)}},
+\]
+where $\beta>0$ controls bias strength:
+\begin{itemize}[leftmargin=*]
+\item $\beta \to 0$: approximately uniform among active participants
+\item $\beta \to \infty$: concentrates on minimum-score participants (approaches deterministic priority)
+\end{itemize}
+
+\begin{algorithm}
+\caption{Probabilistic Priority Allocation (Unit-by-Unit)}
+\label{alg:prob-allocation}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $\text{NeedRec}_t(\cdot,s)$, $\text{TotDel}_t(s)$, $\beta$, $\text{Score}_t(\cdot,s)$
+\State \textbf{Output:} $\text{Rec}_t(\cdot,s)$
+\State $\text{Rec}_t(p,s) \gets 0$ for all $p$
+\State $\text{Remaining} \gets \text{TotDel}_t(s)$
+\While{$\text{Remaining} > 0$}
+    \State $A \gets \{p : \text{NeedRec}_t(p,s) - \text{Rec}_t(p,s) > 0\}$
+    \If{$A = \emptyset$} \textbf{break} \EndIf
+    \State Compute $\Pr(p) \propto e^{-\beta \cdot \text{Score}_t(p,s)}$ for $p \in A$
+    \State Sample $p^* \sim \Pr(\cdot)$
+    \State $\text{Rec}_t(p^*,s) \gets \text{Rec}_t(p^*,s) + 1$
+    \State $\text{Remaining} \gets \text{Remaining} - 1$
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+% ===================== CASH =====================
+\section{Cash Settlement}
+Cash settlement parallels share settlement. After netting and controls, apply:
+
+\subsection{Payment from Debtors}
+For each participant $p$:
+\begin{align*}
+\text{NeedPay}_t(p) &= \max\bigl(0, -C^{(2)}_t(p)\bigr),\\
+\text{Pay}_t(p) &= \min\bigl(K_t(p),\; \text{NeedPay}_t(p)\bigr),
+\end{align*}
+where $K_t(p)\ge 0$ is cash payment capacity.
+
+\subsection{Receipt by Creditors}
+Let $\text{TotPay}_t = \sum_p \text{Pay}_t(p)$. Choose $\text{Rcv}_t(p)$ such that:
+\begin{align*}
+0 &\le \text{Rcv}_t(p) \le \max\bigl(0, C^{(2)}_t(p)\bigr),\\
+\sum_{p\in P} \text{Rcv}_t(p) &= \text{TotPay}_t.
+\end{align*}
+Receipt allocation can mirror the three share-allocation policy families.
+
+\subsection{Post-Cash State}
+\[
+C^{(3)}_t(p) = C^{(2)}_t(p) + \text{Pay}_t(p) - \text{Rcv}_t(p).
+\]
+
+% ===================== ROLL =====================
+\section{Step D: Roll Forward}
+Finally, unsettled obligations roll to the next cycle:
+\[
+X_{t+1} = X^{(3)}_t, \quad C_{t+1} = C^{(3)}_t.
+\]
+The state $\sigma_{t+1} = (X_{t+1}, C_{t+1}, M_{t+1}, B_{t+1}, \Theta)$ becomes the starting point for cycle $t+1$.
+
+% ===================== NUMERIC EXAMPLE =====================
+\section{Worked Multi-Day Numerical Example}
+We illustrate the model with a three-participant, one-security example over two days, showing how allocation policies differ when multiple feasible allocations exist.
+
+\subsection{Setup}
+\begin{itemize}[leftmargin=*]
+\item Participants: $P = \{A, B, C\}$
+\item Security: $S = \{X\}$
+\item For numerical clarity, set $\text{LotSize}(X)=1$ (unit shares).
+\item Ignore cash: $C_t\equiv 0$ (focus on shares).
+\item No risk controls: $g = g_{\text{id}}$.
+\item Classes: $\text{Class}(A)=1$, $\text{Class}(B)=2$, $\text{Class}(C)=3$ (1 is highest priority).
+\end{itemize}
+
+\subsection{Day 0 ($t=0$)}
+\subsubsection{Trades}
+\[
+E_0 = \{(A, X, +300, \pi),\ (B, X, -200, \pi),\ (C, X, -100, \pi)\}.
+\]
+
+\subsubsection{Step A: Netting}
+\[
+\Delta X^{tr}_0=(+300,-200,-100),\quad X^{(1)}_0=(+300,-200,-100).
+\]
+
+\subsubsection{Step B: Controls}
+No effect: $X^{(2)}_0 = X^{(1)}_0$.
+
+\subsubsection{Step C: Settlement}
+Assume delivery capacities:
+\[
+D_0(B,X)=150,\quad D_0(C,X)=100,\quad D_0(A,X)=0.
+\]
+Deliveries:
+\[
+\text{Del}_0(B,X)=150,\quad \text{Del}_0(C,X)=100,\quad \text{TotDel}_0(X)=250.
+\]
+After deliveries:
+\[
+X^{(3a)}_0=(+300,-50,0).
+\]
+Only $A$ is long, so $\text{NeedRec}_0(A,X)=300$ and $A$ receives all delivered shares:
+\[
+\text{Rec}_0(A,X)=250.
+\]
+Post-settlement:
+\[
+X^{(3)}_0=(+50,-50,0).
+\]
+
+\subsubsection{Step D: Roll}
+\[
+X_1=(+50,-50,0).
+\]
+Update aging: $\text{Age}_1(A,X)=1$ (since $A$ remains long), others 0.
+
+\subsection{Day 1 ($t=1$): Multiple Feasible Allocations}
+Choose trades that preserve both short and long sides while creating \emph{two} longs competing for limited delivered shares:
+\[
+E_1=\{(A, X, -30, \pi'),\ (C, X, +20, \pi')\}.
+\]
+That is, $A$ sells 30 (reducing its long), and $C$ buys 20 (creating a long).
+
+\subsubsection{Step A: Netting}
+Trade flow:
+\[
+\Delta X^{tr}_1=( -30, 0, +20).
+\]
+Netting with rolling obligations:
+\[
+X^{(1)}_1=X_1+\Delta X^{tr}_1=(+20,-50,+20).
+\]
+So $B$ is short 50; $A$ and $C$ are long 20 each.
+
+\subsubsection{Step B: Controls}
+No effect: $X^{(2)}_1=X^{(1)}_1$.
+
+\subsubsection{Step C: Settlement}
+Assume $B$ can only deliver 30 shares today:
+\[
+D_1(B,X)=30,\quad D_1(A,X)=D_1(C,X)=0.
+\]
+Deliveries:
+\[
+\text{NeedDel}_1(B,X)=50,\quad \text{Del}_1(B,X)=\min(30,50)=30,\quad \text{TotDel}_1(X)=30.
+\]
+After deliveries:
+\[
+X^{(3a)}_1=(+20,-20,+20).
+\]
+Thus $\text{NeedRec}_1(A,X)=20$, $\text{NeedRec}_1(C,X)=20$, but only 30 shares are available to allocate.
+
+\subsubsection{Policy (c): Deterministic priority allocation}
+Aging: $\text{Age}_1(A,X)=1$ and $\text{Age}_1(C,X)=0$.
+So $A$ has higher priority (older), also higher class.
+Deterministic allocation gives:
+\[
+\text{Rec}_1(A,X)=20,\quad \text{Rec}_1(C,X)=10.
+\]
+Post-settlement:
+\[
+X^{(3)}_1 = (0,-20,+10).
+\]
+Roll:
+\[
+X_2=(0,-20,+10),\quad \text{Age}_2(C,X)=1,\ \text{Age}_2(A,X)=0.
+\]
+
+\subsubsection{Policy (b): Pure randomized allocation (example draw)}
+Feasible allocations satisfy $\text{Rec}_1(A,X)\in[0,20]$, $\text{Rec}_1(C,X)\in[0,20]$, and sum to 30.
+So there are multiple feasible solutions. One valid draw is:
+\[
+\text{Rec}_1(A,X)=12,\quad \text{Rec}_1(C,X)=18.
+\]
+Then:
+\[
+X^{(3)}_1=(+8,-20,+2),\quad X_2=(+8,-20,+2).
+\]
+
+\subsubsection{Policy (hybrid): Probabilistic priority (softmax-biased)}
+Use score components:
+\[
+k_1=-\text{Age}_1,\quad k_2=\text{Class},\quad k_3=-\text{RoundNeed}\ (=\text{NeedRec since LotSize}=1),\quad k_4=\text{FailScore}.
+\]
+Assume $\text{FailScore}_1(A)=\text{FailScore}_1(C)=0$ for simplicity.
+Pick weights $\alpha_1=1$, $\alpha_2=0.2$, $\alpha_3=0$ (ignore size bias here), $\alpha_4=0$.
+Then:
+\[
+\text{Score}_1(A,X)=1\cdot(-1)+0.2\cdot 1=-0.8,\quad
+\text{Score}_1(C,X)=1\cdot(0)+0.2\cdot 3=0.6.
+\]
+For $\beta=1$:
+\[
+\Pr(A)=\frac{e^{0.8}}{e^{0.8}+e^{-0.6}}\approx \frac{2.2255}{2.2255+0.5488}\approx 0.802,
+\quad
+\Pr(C)\approx 0.198.
+\]
+Unit-by-unit allocation will tend to allocate to $A$ until $A$ reaches its cap of 20, after which remaining units go to $C$.
+A typical outcome might be close to the deterministic split $(20,10)$ but with variability for smaller $\beta$.
+
+\subsection{What this example demonstrates}
+\begin{itemize}[leftmargin=*]
+\item Rolling state: the Day 0 fail ($B$ short 50) persists into Day 1 and affects deliveries.
+\item Capacity constraints: limited $D_1(B,X)=30$ produces partial settlement and a remaining short fail.
+\item Allocation policy freedom: deterministic, randomized, and softmax-biased allocation differ only in how they assign $\text{TotDel}$ across competing longs, while respecting feasibility constraints.
+\end{itemize}
+
+% ===================== CONCLUSION =====================
+\section{Conclusion}
+We have presented a complete, gap-free mathematical reconstruction of Continuous Net Settlement as a discrete-time state--transition system. The model explicitly defines all state variables, transition rules, capacity constraints, and allocation policies. Key features include:
+\begin{itemize}[leftmargin=*]
+\item \textbf{Formal precision}: netting, controls, settlement, and roll-forward are defined with explicit intermediate states.
+\item \textbf{Continuous semantics}: unsettled obligations persist and automatically re-net with future trades.
+\item \textbf{Policy modularity}: deterministic priority allocation, pure randomized allocation, and probabilistic priority-biased allocation are interchangeable modules satisfying the same feasibility constraints.
+\item \textbf{Analyzability}: conservation laws and constraints are explicit, enabling simulation, verification, and sensitivity analysis.
+\end{itemize}
+Future work can add richer risk-control operators $g$ (e.g., margin models), corporate-action adjustments via $\Pi_t$, close-out rules, and empirical calibration of allocation policies.
+
+% ===================== REFERENCES =====================
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{9}
+
+\bibitem{pfmi}
+CPMI--IOSCO.
+\newblock \emph{Principles for Financial Market Infrastructures}.
+\newblock Bank for International Settlements, 2012.
+
+\bibitem{duffie}
+D. Duffie.
+\newblock \emph{How Big Banks Fail}.
+\newblock Princeton University Press, 2011.
+
+\bibitem{dtccnscc}
+DTCC/NSCC.
+\newblock Public service descriptions and rules related to CNS and netting/settlement (organizational documentation).
+\newblock \url{https://www.dtcc.com}.
+
+\end{thebibliography}
+
+\end{document}
