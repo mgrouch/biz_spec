@@ -57,7 +57,7 @@ We provide: (1) a complete mathematical model of CNS as a discrete-time state ma
 The formal model supports simulation studies, formal verification of safety properties, comparative analysis with alternative mechanisms (e.g., real-time gross settlement, distributed ledger systems), and sensitivity analysis of policy parameters. It also provides a foundation for reasoning about settlement system design choices (e.g., allocation fairness vs.\ aging vs.\ risk penalties).
 
 \paragraph{Scope and interpretation.}
-This paper should be read as a \emph{structural reconstruction} of CNS-style continuous net settlement: a reference specification that makes the core mechanics explicit and analyzable as a state--transition system. While the model is informed by publicly described clearing workflows (e.g., in the NSCC/DTCC context), it is not intended as a line-by-line reproduction of any proprietary implementation or rulebook, and omits institution-specific exceptions, timelines, and operational procedures. Instead, the goal is to capture the essential invariants, admissibility interfaces, and allocation degrees of freedom in a form suitable for simulation, comparison, and formal reasoning.
+This paper presents a \emph{structural reconstruction} of CNS-style continuous net settlement: a reference specification that makes the core mechanics explicit and amenable to state--transition analysis. The model is informed by publicly described clearing workflows (e.g., NSCC/DTCC) but is not a line-by-line reproduction of any proprietary system or rulebook, and deliberately omits institution-specific exceptions and operational details. Instead, it isolates the key invariants, admissibility interfaces, and allocation degrees of freedom needed for simulation, comparison, and formal reasoning.
 
 % ===================== SETS & TIME =====================
 \section{Sets, Time, and Sign Conventions}
@@ -638,8 +638,7 @@ X^{(3a)}_1=(+20,-20,+20).
 Thus $\text{NeedRec}_1(A,X)=20$, $\text{NeedRec}_1(C,X)=20$, but only 30 shares are available to allocate.
 
 \subsubsection{Policy (c): Deterministic priority allocation}\par
-
-Aging: $\text{Age}_1(A,X)=1$ and $\text{Age}_1(C,X)=0$.
+Aging: $\\ \text{Age}_1(A,X)=1$ and $\text{Age}_1(C,X)=0$.
 So $A$ has higher priority (older), also higher class.
 Deterministic allocation gives:
 \[
