@@ -265,6 +265,70 @@ where $g$ may:
 The identity operator $g_{\text{id}}$ is a valid special case representing no risk controls. Production systems typically implement non-trivial controls to manage risk and operational constraints.
 \end{remark}
 
+\paragraph{A concrete nontrivial control operator.}
+The abstraction of the control operator $g$ can be instantiated in several realistic ways. We provide one example that is both operationally meaningful and structurally simple.
+
+\begin{definition}[Margin Exhaustion Freeze Operator]
+Let $\mathrm{ReqMargin}_t(p)\in\mathbb{R}_{\ge 0}$ be a required-margin functional computed from the post-netting obligation state $(X^{(1)}_t, C^{(1)}_t)$ and valuation conventions $\Pi_t$ (e.g., based on notional exposure, stress loss, or haircut rules). Define the operator $g_{\mathrm{mgn}}$ by:
+\[
+\bigl(X^{(2)}_t, C^{(2)}_t, M_{t+1}, B_{t+1}\bigr)
+=
+g_{\mathrm{mgn}}\bigl(X^{(1)}_t, C^{(1)}_t, M_t, B_t, \Theta\bigr),
+\]
+where obligations are preserved,
+\[
+X^{(2)}_t(p,s)=X^{(1)}_t(p,s)\ \forall(p,s),\qquad
+C^{(2)}_t(p)=C^{(1)}_t(p)\ \forall p,
+\]
+but control variables are updated by the margin constraint:
+\[
+B_{t+1}(p,s)=
+\begin{cases}
+1, & \text{if } \mathrm{ReqMargin}_t(p) > M_t(p),\\
+B_t(p,s), & \text{otherwise},
+\end{cases}
+\qquad
+M_{t+1}(p)=\max\{0,\ M_t(p)-\mathrm{ReqMargin}_t(p)\}.
+\]
+\end{definition}
+
+\begin{remark}
+Under $g_{\mathrm{mgn}}$, a participant whose available margin is exhausted is operationally \emph{frozen}: its obligations persist and roll forward, but settlement activity can be prevented or throttled by blocks $B_{t+1}(p,s)=1$. This captures a common production behavior in which insufficient collateral halts settlement processing without canceling obligations.
+\end{remark}
+
+\paragraph{Minimal structural assumptions on $g$.}
+To avoid pathological control rules and to make explicit what is required for subsequent invariants, we assume that any admissibility operator $g$ satisfies the following minimal properties.
+
+\begin{proposition}[Minimal Properties of the Control Operator $g$]
+For each cycle $t$, the operator
+\[
+\bigl(X^{(2)}_t, C^{(2)}_t, M_{t+1}, B_{t+1}\bigr)
+=
+g\bigl(X^{(1)}_t, C^{(1)}_t, M_t, B_t, \Theta\bigr)
+\]
+satisfies:
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Obligation preservation (no creation/destruction):}
+\[
+\sum_{p\in P}X^{(2)}_t(p,s)=\sum_{p\in P}X^{(1)}_t(p,s)\ \ \forall s\in S,
+\qquad
+\sum_{p\in P}C^{(2)}_t(p)=\sum_{p\in P}C^{(1)}_t(p).
+\]
+\item \textbf{Sign preservation (no direction flips):} for all $(p,s)$,
+\[
+X^{(1)}_t(p,s)\ge 0 \Rightarrow X^{(2)}_t(p,s)\ge 0,\qquad
+X^{(1)}_t(p,s)\le 0 \Rightarrow X^{(2)}_t(p,s)\le 0,
+\]
+and analogously for cash obligations $C^{(1)}_t(p)$ and $C^{(2)}_t(p)$.
+\item \textbf{Feasibility preservation:} the post-control state admits a feasible settlement outcome under some capacity inputs (possibly zero), i.e., there exist $(D_t,K_t)$ such that Step C is well-defined and constraints can be satisfied.
+\item \textbf{Monotonic restrictiveness:} $g$ may impose blocks/throttles or reduce effective settlement capacities, but does not \emph{increase} a participant's ability to settle relative to the unconstrained state.
+\end{enumerate}
+\end{proposition}
+
+\begin{remark}
+These properties formalize the interpretation of $g$ as a \emph{restriction interface} that governs admissibility and risk constraints, rather than as an alternative settlement mechanism. Richer implementations (e.g., stress-based margining, participant class freezes, security-level holds) can be expressed while preserving the state-machine structure.
+\end{remark}
+
 % ===================== STEP C =====================
 \section{Step C: Settlement}
 Settlement occurs in two phases: share settlement and cash settlement.
@@ -415,7 +479,13 @@ where $\beta>0$ controls bias strength:
 
 % ===================== CASH =====================
 \section{Cash Settlement}
-Cash settlement parallels share settlement. After netting and controls, apply:
+Cash settlement parallels share settlement. 
+
+\begin{remark}[Operational Asymmetries in Cash Settlement]
+Although cash settlement is modeled symmetrically to share settlement for analytical clarity, production systems often differ operationally. In practice, the cash ``capacity'' $K_t(p)$ may reflect prefunded balances, committed credit lines, intraday credit limits, or central-bank money arrangements rather than a literal exogenous cap. Some infrastructures rely on prefunding (or settlement guarantee funds), while others allow daylight overdrafts subject to collateralization and risk controls. The present model accommodates these differences by treating $K_t$ and the control operator $g$ as the loci where funding, credit, and liquidity policies enter.
+\end{remark}
+
+After netting and controls, apply:
 
 \subsection{Payment from Debtors}
 For each participant $p$:
