@@ -241,12 +241,15 @@ If initial obligations are balanced ($\sum_{p\in P} X_0(p,s) = 0$ for all $s$) a
 \end{proposition}
 
 \begin{proof}
-By induction: base case holds by assumption. If $\sum_p X_t(p,s)=0$ and $\sum_p \Delta X^{tr}_t(p,s)=0$, then $\sum_p X^{(1)}_t(p,s)=0$.
+By induction: base case holds by assumption. 
+
+If $\sum_p X_t(p,s)=0$ and $\sum_p \Delta X^{tr}_t(p,s)=0$, then $\sum_p X^{(1)}_t(p,s)=0$.
 Steps B--D only redistribute shares among participants (i.e., allocate delivered shares to receivers) and therefore preserve the per-security sum.
 \end{proof}
 
 \begin{corollary}[Cash Conservation Under Balanced Cash Legs]
-If $\sum_p C_0(p)=0$ and $\sum_p \Delta C^{tr}_t(p)=0$ for each $t$, then $\sum_p C_t(p)=0$ for all $t$.
+
+If $\sum_p C_0(p)=0$ and $\sum_p \Delta C^{tr}_t(p)=0$ for each $t$, then $\sum_p \\ C_t(p)=0$ for all $t$.
 \end{corollary}
 
 % ===================== STEP B =====================
@@ -287,12 +290,15 @@ but control variables are updated by the margin constraint:
 \[
 B_{t+1}(p,s)=
 \begin{cases}
-1, & \text{if } \mathrm{ReqMargin}_t(p) > M_t(p),\\
-B_t(p,s), & \text{otherwise},
+1, & \mathrm{ReqMargin}_t(p) > M_t(p),\\
+B_t(p,s), & \text{otherwise}.
 \end{cases}
-\qquad
-M_{t+1}(p)=\max\{0,\ M_t(p)-\mathrm{ReqMargin}_t(p)\}.
 \]
+
+\[
+M_{t+1}(p)=\max\!\bigl\{0,\; M_t(p)-\mathrm{ReqMargin}_t(p)\bigr\}.
+\]
+
 \end{definition}
 
 \begin{remark}
@@ -313,14 +319,18 @@ satisfies:
 \begin{enumerate}[leftmargin=*]
 \item \textbf{Obligation preservation (no creation/destruction):}
 \[
-\sum_{p\in P}X^{(2)}_t(p,s)=\sum_{p\in P}X^{(1)}_t(p,s)\ \ \forall s\in S,
-\qquad
-\sum_{p\in P}C^{(2)}_t(p)=\sum_{p\in P}C^{(1)}_t(p).
+\begin{aligned}
+\sum_{p\in P}X^{(2)}_t(p,s)&=\sum_{p\in P}X^{(1)}_t(p,s)\ \ \forall s\in S,
+\qquad\\
+\sum_{p\in P}C^{(2)}_t(p)&=\sum_{p\in P}C^{(1)}_t(p).
+\end{aligned}
 \]
 \item \textbf{Sign preservation (no direction flips):} for all $(p,s)$,
 \[
-X^{(1)}_t(p,s)\ge 0 \Rightarrow X^{(2)}_t(p,s)\ge 0,\qquad
-X^{(1)}_t(p,s)\le 0 \Rightarrow X^{(2)}_t(p,s)\le 0,
+\begin{aligned}
+X^{(1)}_t(p,s)\ge 0 &\Rightarrow X^{(2)}_t(p,s)\ge 0,\qquad\\
+X^{(1)}_t(p,s)\le 0 &\Rightarrow X^{(2)}_t(p,s)\le 0,
+\end{aligned}
 \]
 and analogously for cash obligations $C^{(1)}_t(p)$ and $C^{(2)}_t(p)$.
 \item \textbf{Feasibility preservation:} the post-control state admits a feasible settlement outcome under some capacity inputs (possibly zero), i.e., there exist $(D_t,K_t)$ such that Step C is well-defined and constraints can be satisfied.
@@ -368,8 +378,10 @@ X^{(3)}_t(p,s) = X^{(3a)}_t(p,s) - \text{Rec}_t(p,s).
 \begin{proposition}[Per-Entry Magnitude Non-Increase Under Feasible Settlement]
 For each $(p,s)$, if $\text{Del}_t(p,s)\le \text{NeedDel}_t(p,s)$ and $\text{Rec}_t(p,s)\le \text{NeedRec}_t(p,s)$, then settlement does not push any obligation further away from zero in the \emph{same direction}:
 \[
-X^{(2)}_t(p,s)\le 0 \Rightarrow X^{(3)}_t(p,s)\ge X^{(2)}_t(p,s),\quad
-X^{(2)}_t(p,s)\ge 0 \Rightarrow X^{(3)}_t(p,s)\le X^{(2)}_t(p,s).
+\begin{aligned}
+X^{(2)}_t(p,s)\le 0 &\Rightarrow X^{(3)}_t(p,s)\ge X^{(2)}_t(p,s),\quad\\
+X^{(2)}_t(p,s)\ge 0 &\Rightarrow X^{(3)}_t(p,s)\le X^{(2)}_t(p,s).
+\end{aligned}
 \]
 Equivalently, shorts become less short (or unchanged) and longs become less long (or unchanged).
 \end{proposition}
@@ -409,7 +421,13 @@ For a lookback window $W$:
 \subsubsection{Priority key and greedy allocation}
 Construct a priority key for each $(p,s)$ with $\text{NeedRec}_t(p,s) > 0$:
 \[
-\text{Key}_t(p,s) = \bigl(-\text{Age}_t(p,s),\; \text{Class}(p),\; -\text{RoundNeed}_t(p,s),\; \text{FailScore}_t(p),\; \text{TieID}(p)\bigr),
+\begin{alignedat}{2}
+\text{Key}_t(p,s) = \bigl(
+  -&\text{Age}_t(p,s), \quad &&\text{Class}(p),\\
+  -&\text{RoundNeed}_t(p,s), \quad &&\text{FailScore}_t(p),\\
+  &\text{TieID}(p)
+\bigr)
+\end{alignedat}
 \]
 compared lexicographically (ascending).
 Greedy allocation in this order with remaining supply $R\gets \text{TotDel}_t(s)$:
@@ -437,10 +455,12 @@ This hybrid approach biases random allocation toward priority rules.
 \subsubsection{Components and score}
 Using the same information as the deterministic key, define components:
 \[
-k_1(p,s) = -\text{Age}_t(p,s),\quad
-k_2(p,s) = \text{Class}(p),\quad
-k_3(p,s) = -\text{RoundNeed}_t(p,s),\quad
+\begin{aligned}
+k_1(p,s) &= -\text{Age}_t(p,s),\quad
+k_2(p,s) = \text{Class}(p),\quad\\
+k_3(p,s) &= -\text{RoundNeed}_t(p,s),\quad
 k_4(p,s) = \text{FailScore}_t(p).
+\end{aligned}
 \]
 Define scalar score:
 \[
@@ -554,7 +574,10 @@ D_0(B,X)=150,\quad D_0(C,X)=100,\quad D_0(A,X)=0.
 \]
 Deliveries:
 \[
-\text{Del}_0(B,X)=150,\quad \text{Del}_0(C,X)=100,\quad \text{TotDel}_0(X)=250.
+\begin{aligned}
+\text{Del}_0(B,X)&=150,\quad \text{Del}_0(C,X)=100,\quad \\
+\text{TotDel}_0(X)&=250.
+\end{aligned}
 \]
 After deliveries:
 \[
@@ -603,7 +626,10 @@ D_1(B,X)=30,\quad D_1(A,X)=D_1(C,X)=0.
 \]
 Deliveries:
 \[
-\text{NeedDel}_1(B,X)=50,\quad \text{Del}_1(B,X)=\min(30,50)=30,\quad \text{TotDel}_1(X)=30.
+\begin{aligned}
+\text{NeedDel}_1(B,X)&=50,\quad \text{Del}_1(B,X)=\min(30,50)=30,\quad \\
+\text{TotDel}_1(X)&=30.
+\end{aligned}
 \]
 After deliveries:
 \[
@@ -611,7 +637,8 @@ X^{(3a)}_1=(+20,-20,+20).
 \]
 Thus $\text{NeedRec}_1(A,X)=20$, $\text{NeedRec}_1(C,X)=20$, but only 30 shares are available to allocate.
 
-\subsubsection{Policy (c): Deterministic priority allocation}
+\subsubsection{Policy (c): Deterministic priority allocation}\par
+
 Aging: $\text{Age}_1(A,X)=1$ and $\text{Age}_1(C,X)=0$.
 So $A$ has higher priority (older), also higher class.
 Deterministic allocation gives:
@@ -627,7 +654,8 @@ Roll:
 X_2=(0,-20,+10),\quad \text{Age}_2(C,X)=1,\ \text{Age}_2(A,X)=0.
 \]
 
-\subsubsection{Policy (b): Pure randomized allocation (example draw)}
+\subsubsection{Policy (b): Pure randomized allocation (example draw)}\par
+
 Feasible allocations satisfy $\text{Rec}_1(A,X)\in[0,20]$, $\text{Rec}_1(C,X)\in[0,20]$, and sum to 30.
 So there are multiple feasible solutions. One valid draw is:
 \[
@@ -638,17 +666,26 @@ Then:
 X^{(3)}_1=(+8,-20,+2),\quad X_2=(+8,-20,+2).
 \]
 
-\subsubsection{Policy (hybrid): Probabilistic priority (softmax-biased)}
+\subsubsection{Policy (hybrid): Probabilistic priority (softmax-biased)}\par
+
 Use score components:
 \[
-k_1=-\text{Age}_1,\quad k_2=\text{Class},\quad k_3=-\text{RoundNeed}\ (=\text{NeedRec since LotSize}=1),\quad k_4=\text{FailScore}.
+\begin{aligned}
+k_1(p,s) &= -\mathrm{Age}_t(p,s), \quad
+k_2(p,s) = \mathrm{Class}(p), \\
+k_3(p,s) &= -\mathrm{RoundNeed}_t(p,s)\\
+(\text{and if }\mathrm{LotSize}(s)&=1,\ \mathrm{RoundNeed}_t=\mathrm{NeedRec}_t),\\
+k_4(p,s) &= \mathrm{FailScore}_t(p).
+\end{aligned}
 \]
 Assume $\text{FailScore}_1(A)=\text{FailScore}_1(C)=0$ for simplicity.
 Pick weights $\alpha_1=1$, $\alpha_2=0.2$, $\alpha_3=0$ (ignore size bias here), $\alpha_4=0$.
 Then:
 \[
-\text{Score}_1(A,X)=1\cdot(-1)+0.2\cdot 1=-0.8,\quad
-\text{Score}_1(C,X)=1\cdot(0)+0.2\cdot 3=0.6.
+\begin{aligned}
+\text{Score}_1(A,X)&=1\cdot(-1)+0.2\cdot 1=-0.8,\\
+\text{Score}_1(C,X)&=1\cdot(0)+0.2\cdot 3=0.6.
+\end{aligned}
 \]
 For $\beta=1$:
 \[
@@ -676,6 +713,9 @@ We have presented a complete, gap-free mathematical reconstruction of Continuous
 \item \textbf{Analyzability}: conservation laws and constraints are explicit, enabling simulation, verification, and sensitivity analysis.
 \end{itemize}
 Future work can add richer risk-control operators $g$ (e.g., margin models), corporate-action adjustments via $\Pi_t$, close-out rules, and empirical calibration of allocation policies.
+
+\section*{Acknowledgments}
+This work was prepared with the supervised assistance of artificial intelligence tools, including ChatGPT and DeepSeek, which were employed to aid in mathematical drafting, and editorial preparation. All conceptual development, and final revisions were conducted independently by the author.
 
 % ===================== REFERENCES =====================
 \bibliographystyle{ACM-Reference-Format}
