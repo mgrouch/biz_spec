@@ -183,6 +183,10 @@ where:
 $D_t$ and $K_t$ represent \emph{capacity constraints} that may arise from liquidity limits, inventory/borrow constraints, operational capability, or policy. They are exogenous inputs to the settlement process.
 \end{remark}
 
+\begin{remark}[Markov Property]
+The CNS dynamics defined above satisfy a Markov property with respect to the state $\sigma_t$: conditioned on the current state and the exogenous inputs $(E_t, D_t, K_t, \Pi_t)$, the distribution of the next state $\sigma_{t+1}$ is independent of the prior history. All history-dependent features (e.g., rolling fails, aging, margin exhaustion, and bounded lookback statistics) are explicitly encoded in the state variables, allowing the system to be analyzed as a controlled discrete-time Markov process.
+\end{remark}
+
 % ===================== TRANSITION OVERVIEW =====================
 \section{Transition Steps: Overview}
 Each settlement cycle executes four sequential steps:
