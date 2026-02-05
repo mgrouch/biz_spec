@@ -715,27 +715,53 @@ Table~\ref{tab:cns-rtgs-dlt} situates the CNS reference specification developed 
 
 \begin{table*}[t]
 \centering
-\caption{Structural comparison of settlement architectures as reference state--transition systems}
+\caption{High-level comparison of settlement architectures}
 \label{tab:cns-rtgs-dlt}
-\setlength{\tabcolsep}{4pt}
-\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.15}
 \begin{tabularx}{\textwidth}{lXXX}
 \toprule
-\textbf{Dimension} & \textbf{CNS} & \textbf{RTGS} & \textbf{DLT / ledger-based} \\
+\textbf{Aspect} & \textbf{CNS} & \textbf{RTGS} & \textbf{DLT / Ledger-Based} \\
 \midrule
-Settlement granularity & Multilateral netting; rolling obligations & Gross; immediate or queued & Transaction- or block-level ordering \\
-State representation & Obligation vectors $(X_t, C_t)$ + controls $(M_t,B_t)$ & Account balances + payment queues & Replicated ledger state + protocol metadata \\
-Time model & Discrete cycles (e.g., business days) & Event-driven / continuous processing & Discrete rounds / blocks; finality notion \\
-Liquidity usage & Reduced via netting (depends on fails/caps) & Higher; prefunding or intraday liquidity & Design-dependent (tokens, liquidity bridges) \\
-Failure handling & Fails persist and roll forward & Rejection or queueing; partial processing & Forks/reorgs or finality delays (protocol-dependent) \\
-Allocation freedom & Policy-defined allocation among competing claims & None (execution order rules) & Protocol-defined ordering and inclusion rules \\
-Risk controls locus & Explicit operator $g$ (margin, blocks, throttles) & Credit limits, prefunding, gatekeeping rules & Protocol rules, collateral/slashing (if applicable) \\
-Cash treatment & Capacity-based model; operational asymmetries via $K_t$ and $g$ & Central-bank money / settlement account model & Native tokens or bridged cash rails \\
-Determinism vs.\ randomness & Deterministic or stochastic policy modules & Deterministic processing logic & Often probabilistic leader/committee selection \\
-Markov view & Controlled Markov process (state-augmented) & Markov w.r.t.\ balances/queues & Markov w.r.t.\ ledger/protocol state \\
+Settlement principle 
+& Multilateral netting over time 
+& Immediate gross settlement 
+& Ledger-based transaction finalization \\
+
+Primary state abstraction 
+& Net obligations 
+& Account balances 
+& Distributed ledger \\
+
+Timing model 
+& Discrete settlement cycles 
+& Continuous / event-driven 
+& Discrete rounds or blocks \\
+
+Liquidity profile 
+& Liquidity-efficient via netting 
+& Liquidity-intensive 
+& Design-dependent \\
+
+Handling of shortfalls or failures 
+& Obligations roll forward 
+& Transactions queue or fail 
+& Protocol-defined resolution \\
+
+Control and policy flexibility 
+& Explicit, configurable policies 
+& Limited, rule-based 
+& Embedded in protocol \\
+
+Formal modeling perspective 
+& State--transition system 
+& State--transition system 
+& State--transition system \\
+
 \bottomrule
 \end{tabularx}
 \end{table*}
+
 
 % ===================== CONCLUSION =====================
 \section{Conclusion}
