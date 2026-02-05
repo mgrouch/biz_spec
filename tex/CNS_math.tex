@@ -56,6 +56,9 @@ We provide: (1) a complete mathematical model of CNS as a discrete-time state ma
 \paragraph{Applications.}
 The formal model supports simulation studies, formal verification of safety properties, comparative analysis with alternative mechanisms (e.g., real-time gross settlement, distributed ledger systems), and sensitivity analysis of policy parameters. It also provides a foundation for reasoning about settlement system design choices (e.g., allocation fairness vs.\ aging vs.\ risk penalties).
 
+\paragraph{Scope and interpretation.}
+This paper should be read as a \emph{structural reconstruction} of CNS-style continuous net settlement: a reference specification that makes the core mechanics explicit and analyzable as a state--transition system. While the model is informed by publicly described clearing workflows (e.g., in the NSCC/DTCC context), it is not intended as a line-by-line reproduction of any proprietary implementation or rulebook, and omits institution-specific exceptions, timelines, and operational procedures. Instead, the goal is to capture the essential invariants, admissibility interfaces, and allocation degrees of freedom in a form suitable for simulation, comparison, and formal reasoning.
+
 % ===================== SETS & TIME =====================
 \section{Sets, Time, and Sign Conventions}
 Let:
