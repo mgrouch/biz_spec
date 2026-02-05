@@ -11,6 +11,9 @@
 \usepackage{makecell}
 \usepackage{array}
 \usepackage{tabularx}
+% Optional: nicer wrapping in tabularx
+\usepackage{ragged2e}
+\newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
 
 % ===================== Metadata =====================
 \title{A Complete State--Transition Reconstruction of Continuous Net Settlement}
@@ -181,6 +184,10 @@ where:
 
 \begin{remark}
 $D_t$ and $K_t$ represent \emph{capacity constraints} that may arise from liquidity limits, inventory/borrow constraints, operational capability, or policy. They are exogenous inputs to the settlement process.
+\end{remark}
+
+\begin{remark}[Markov Property]
+The CNS dynamics defined above satisfy a Markov property with respect to the state $\sigma_t$: conditioned on the current state and the exogenous inputs $(E_t, D_t, K_t, \Pi_t)$, the distribution of the next state $\sigma_{t+1}$ is independent of the prior history. All history-dependent features (e.g., rolling fails, aging, margin exhaustion, and bounded lookback statistics) are explicitly encoded in the state variables, allowing the system to be analyzed as a controlled discrete-time Markov process.
 \end{remark}
 
 % ===================== TRANSITION OVERVIEW =====================
@@ -701,6 +708,34 @@ A typical outcome might be close to the deterministic split $(20,10)$ but with v
 \item Capacity constraints: limited $D_1(B,X)=30$ produces partial settlement and a remaining short fail.
 \item Allocation policy freedom: deterministic, randomized, and softmax-biased allocation differ only in how they assign $\text{TotDel}$ across competing longs, while respecting feasibility constraints.
 \end{itemize}
+
+% ===================== COMPARISON =====================
+\section{Comparative Reference Specification Perspective}
+Table~\ref{tab:cns-rtgs-dlt} situates the CNS reference specification developed in this paper alongside canonical RTGS (Real-Time Gross Settlement) and ledger-based (DLT - Distributed Ledger Technology) reference models, emphasizing differences in state structure, transition semantics, and policy degrees of freedom rather than implementation detail.
+
+\begin{table*}[t]
+\centering
+\caption{Structural comparison of settlement architectures as reference state--transition systems}
+\label{tab:cns-rtgs-dlt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabularx}{\textwidth}{lXXX}
+\toprule
+\textbf{Dimension} & \textbf{CNS} & \textbf{RTGS} & \textbf{DLT / ledger-based} \\
+\midrule
+Settlement granularity & Multilateral netting; rolling obligations & Gross; immediate or queued & Transaction- or block-level ordering \\
+State representation & Obligation vectors $(X_t, C_t)$ + controls $(M_t,B_t)$ & Account balances + payment queues & Replicated ledger state + protocol metadata \\
+Time model & Discrete cycles (e.g., business days) & Event-driven / continuous processing & Discrete rounds / blocks; finality notion \\
+Liquidity usage & Reduced via netting (depends on fails/caps) & Higher; prefunding or intraday liquidity & Design-dependent (tokens, liquidity bridges) \\
+Failure handling & Fails persist and roll forward & Rejection or queueing; partial processing & Forks/reorgs or finality delays (protocol-dependent) \\
+Allocation freedom & Policy-defined allocation among competing claims & None (execution order rules) & Protocol-defined ordering and inclusion rules \\
+Risk controls locus & Explicit operator $g$ (margin, blocks, throttles) & Credit limits, prefunding, gatekeeping rules & Protocol rules, collateral/slashing (if applicable) \\
+Cash treatment & Capacity-based model; operational asymmetries via $K_t$ and $g$ & Central-bank money / settlement account model & Native tokens or bridged cash rails \\
+Determinism vs.\ randomness & Deterministic or stochastic policy modules & Deterministic processing logic & Often probabilistic leader/committee selection \\
+Markov view & Controlled Markov process (state-augmented) & Markov w.r.t.\ balances/queues & Markov w.r.t.\ ledger/protocol state \\
+\bottomrule
+\end{tabularx}
+\end{table*}
 
 % ===================== CONCLUSION =====================
 \section{Conclusion}
