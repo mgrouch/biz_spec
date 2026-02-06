@@ -14,23 +14,24 @@
 \newcommand{\fitcol}[1]{\resizebox{\columnwidth}{!}{$\displaystyle #1$}}
 \newcommand{\fitcoltext}[1]{\resizebox{\columnwidth}{!}{$#1$}}
 
-% ===================== Key-feature emphasis =====================
-% If your TeX setup is missing the *serif bold* font used by acmart, \textbf can look unchanged.
-% This macro forces a bold SANS face (which is almost always available) so features visibly pop.
-\newcommand{\kfeat}[1]{{\sffamily\bfseries #1}}
+% ===================== Visible "bold" (robust under broken bold fonts) =====================
+% If your TeX setup is missing the bold font shapes used by acmart, \textbf/\bfseries can look unchanged.
+% These macros force Computer Modern Sans Bold Extended (cmss/bx), which is essentially always available.
+\DeclareRobustCommand{\kfeat}[1]{{\fontfamily{cmss}\fontseries{bx}\selectfont #1}}
+\DeclareRobustCommand{\khead}[1]{{\fontfamily{cmss}\fontseries{bx}\selectfont #1}}
 
 % ===================== Theorems =====================
 
-% ---- Theorem headings that pop (no boxes, no color) ----
+% ---- Theorem headings that pop (robust visible-bold, no boxes, no color) ----
 \usepackage{amsthm}
 
 \newtheoremstyle{pbplain}
-  {6pt}{6pt}{\itshape}{0pt}{\bfseries}{.}{0.6em}
-  {\textsc{\bfseries\thmname{#1}}\thmnumber{ #2}\thmnote{ \bfseries(#3)}}
+  {6pt}{6pt}{\itshape}{0pt}{} {.}{0.6em}
+  {\khead{\thmname{#1}\thmnumber{ #2}}\thmnote{ \khead{(#3)}}}
 
 \newtheoremstyle{pbdef}
-  {6pt}{6pt}{\normalfont}{0pt}{\bfseries}{.}{0.6em}
-  {\textsc{\bfseries\thmname{#1}}\thmnumber{ #2}\thmnote{ \bfseries(#3)}}
+  {6pt}{6pt}{\normalfont}{0pt}{} {.}{0.6em}
+  {\khead{\thmname{#1}\thmnumber{ #2}}\thmnote{ \khead{(#3)}}}
 
 \theoremstyle{pbdef}
 \newtheorem{definition}{Definition}[section]
@@ -98,11 +99,11 @@ of failures.
 \subsection{Core Challenges and Solutions}
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{Partitioning for Scalability}: Processing is partitioned by \kfeat{security identifier}, allowing independent and parallel processing per security while preserving correctness.
-  \item \textbf{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after \kfeat{crashes}.
-  \item \textbf{Partial Settlement Support}: The system must handle cases where only \kfeat{partial quantities} of securities are available for allocation across client trades.
-  \item \textbf{Crash Recovery}: The system must recover deterministically from failures without losing allocated state using \kfeat{write-ahead logging (WAL)}.
-  \item \textbf{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
+  \item \khead{Partitioning for Scalability}: Processing is partitioned by \kfeat{security identifier}, allowing independent and parallel processing per security while preserving correctness.
+  \item \khead{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after \kfeat{crashes}.
+  \item \khead{Partial Settlement Support}: The system must handle cases where only \kfeat{partial quantities} of securities are available for allocation across client trades.
+  \item \khead{Crash Recovery}: The system must recover deterministically from failures without losing allocated state using \kfeat{write-ahead logging (WAL)}.
+  \item \khead{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
 \end{enumerate}
 
 \subsection{Modeling Approach}
@@ -193,14 +194,14 @@ Let $\mathcal{E}$ be the set of all incoming events/messages. Each event $e\in\m
 key : \mathcal{E} \rightarrow S.
 \]
 
-\textbf{Routing Rules:}
+\khead{Routing Rules:}
 \begin{itemize}[leftmargin=*]
   \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
   \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
 \end{itemize}
 
-\textbf{Demultiplexing:}
+\khead{Demultiplexing:}
 \[
 \mathsf{MSG}(M) \equiv \{\, \mathsf{MSG}_s(M(s)) \mid s \in dom(M)\,\}.
 \]
