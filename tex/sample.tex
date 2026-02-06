@@ -76,7 +76,7 @@ The system handles Continuous Net Settlement (CNS) obligations by allocating set
 Key features include: \kfeat{Security-ID partitioning} for parallel processing,
 \kfeat{pluggable allocation strategies},
 \kfeat{exactly-once publication} guarantees to downstream lending systems,
-\kfeat{crash recovery via write-ahead logging (WAL)},
+\kfeat{crash recovery via transactional processing over a durable ordered message log},
 and \kfeat{partial-settlement support}.
 The formal model enables rigorous reasoning about correctness, fault tolerance, and progress properties.
 \end{abstract}
@@ -102,7 +102,7 @@ of failures.
   \item \khead{Partitioning for Scalability}: Processing is partitioned by \kfeat{security identifier}, allowing independent and parallel processing per security while preserving correctness.
   \item \khead{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after \kfeat{crashes}.
   \item \khead{Partial Settlement Support}: The system must handle cases where only \kfeat{partial quantities} of securities are available for allocation across client trades.
-  \item \khead{Crash Recovery}: The system must recover deterministically from failures without losing allocated state using \kfeat{write-ahead logging (WAL)}.
+  \item \khead{Crash Recovery}: The system recovers deterministically using \kfeat{transactional commits} against a \kfeat{durable ordered message log}: state updates, output publication, and advancement of the input cursor occur atomically, so crashes do not lose committed progress.
   \item \khead{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
 \end{enumerate}
 
@@ -139,9 +139,12 @@ Each trade $t \in T$ represents a client transaction requiring settlement. Trade
 \begin{aligned}
 client(t) &\in C, &&\text{the client who executed the trade}\\
 sec(t) &\in S, &&\text{the security being traded}\\
-qty^{tot}(t) &\in \mathbb{Z}_{\ge 0}, &&\text{total quantity to be settled}
+qty^{tot}(t) &\in \mathbb{Z}_{\ge 0}, &&\text{total quantity to be settled (magnitude)}
 \end{aligned}
 \]
+
+\paragraph{Quantity sign and direction.}
+Trade and allocation quantities in this model are \emph{non-negative magnitudes}. Trade direction (e.g., buy vs.\ sell, receive vs.\ deliver) is treated as a separate attribute and is not needed for the allocation mechanics specified here. In contrast, CNS obligations (below) use a \emph{signed} convention: positive means PB is due to receive, negative means PB must deliver.
 
 The system tracks allocated quantity per trade:
 \[
@@ -161,6 +164,7 @@ M : S \rightharpoonup \mathbb{Z}.
 
 For each security $s \in S$, CNS provides the PB's net open obligation $O(s)\in\mathbb{Z}$.
 A positive $O(s)$ indicates CNS owes securities to PB (receive), while negative indicates PB owes CNS (deliver).
+The same sign convention applies to each $M(s)$ when present.
 
 The system only allocates settlement supply derived from decreases in receive obligations:
 \[
@@ -225,7 +229,7 @@ Let the global state be $\sigma = \langle \sigma_s \rangle_{s\in S}$. For any ev
 
 For a fixed security $s\in S$, shard state:
 \[
-\sigma_s = (O_s,\ Tr_s,\ A_s,\ U_s,\ P_s,\ L_s,\ \Theta_s).
+\sigma_s = (O_s,\ Tr_s,\ A_s,\ U_s,\ P_s,\ K_s,\ \Theta_s).
 \]
 
 \begin{itemize}[leftmargin=*]
@@ -234,7 +238,7 @@ For a fixed security $s\in S$, shard state:
   \item $A_s\subseteq ID_s\times T\times\mathbb{Z}_{\ge 0}$: allocation ledger, tuples $(id,t,q)$.
   \item $U_s\in\mathbb{Z}_{\ge 0}$: unallocated settlement carry.
   \item $P_s:ID_s\rightharpoonup\{\mathsf{pending},\mathsf{published}\}$: publication status map.
-  \item $L_s=\langle e_1,\dots,e_n\rangle$: persistent append-only log (WAL).
+  \item $K_s\in\mathbb{Z}_{\ge 0}$: durable input cursor (last committed position) for the per-security ordered message stream.
   \item $\Theta_s$: configuration and strategy parameters.
 \end{itemize}
 
@@ -247,12 +251,12 @@ ID = \biguplus_{s\in S} ID_s,
 
 \subsection{Persistence Model}
 
-All components $(O_s,Tr_s,A_s,U_s,P_s,L_s)$ are persistent and survive crashes. Runtime-only structures are volatile and omitted.
+All components $(O_s,Tr_s,A_s,U_s,P_s,K_s)$ are persistent and survive crashes. Runtime-only structures are volatile and omitted.
 
 \subsection{Initial State}
 
 \[
-\sigma_{0,s} = (0,\ \emptyset,\ \emptyset,\ 0,\ \emptyset,\ \langle\rangle,\ \Theta_s).
+\sigma_{0,s} = (0,\ \emptyset,\ \emptyset,\ 0,\ \emptyset,\ 0,\ \Theta_s).
 \]
 
 \subsection{Per-Shard Actions}
@@ -273,25 +277,16 @@ All components $(O_s,Tr_s,A_s,U_s,P_s,L_s)$ are persistent and survive crashes. 
 
 where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 
-\subsection{Write-Ahead Logging Discipline}
+\subsection{Transactional Processing Discipline (Normative)}
 
-For any transition that mutates persistent state, the system must append a corresponding record to $L_s$ \emph{before} the mutation becomes visible. This discipline ensures crash recovery: after a crash and restart, the system can reconstruct the exact state by replaying all log records in order, starting from the initial empty state.
-
-\subsubsection{Log Record Types}
-
-\begin{equation*}
-\mathsf{LogRec}_s \in
-\left\{
-\vphantom{\sum_{i=1}^{n}}
-\begin{aligned}
-\mathsf{TradeAdded}(t),\ &\mathsf{CNSSet}(s,x),\\
-\mathsf{CarryInc}(s,\delta),\ &\mathsf{AllocationCreated}(id,t,s,q),\\
-\mathsf{Published}(id) &
-\end{aligned}
-\right\}.
-\end{equation*}
-
-Each log record captures sufficient information to reconstruct the state change during recovery. For example, $\mathsf{CarryInc}(s,\delta)$ records both the security identifier and the quantity of settlement supply that became available.
+\khead{Atomicity assumption (exactly-once engine):}
+For any input-driven action (e.g., $\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
+\begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
+  \item persists the resulting shard state updates (e.g., $A_s,U_s,P_s,O_s,Tr_s$),
+  \item emits the corresponding output message to the downstream lending interface when applicable (notably for $\mathsf{PUBLISH}_s(id)$),
+  \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
+\end{enumerate}
+If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records. This is the sole crash-recovery mechanism required by the design (no separate per-shard WAL is assumed).
 
 \subsection{Derived Quantities}
 
@@ -303,7 +298,7 @@ This $Need_s$ represents the total settlement demand from all client trades for 
 % ===================== TRANSITIONS =====================
 \subsection{Per-Shard Transition Relation: Detailed Explanations}
 
-The following transitions define the core operational behavior of each security shard. Each transition follows the write-ahead logging discipline: the corresponding log record is appended to $L_s$ \emph{before} the state mutation takes effect.
+The following transitions define the core operational behavior of each security shard. Input-driven transitions are committed transactionally together with cursor advancement as specified above; internal transitions (e.g., $\mathsf{ALLOCATE}_s$) may also be executed transactionally, but do not necessarily advance $K_s$.
 
 \subsubsection{Start-of-Day Reconciliation}
 
@@ -312,10 +307,8 @@ The system reconciles with CNS at start of day to establish the initial obligati
 \sigma_s \xrightarrow{\mathsf{SOD\_RECON}_s(x)}_s \sigma_s'
 \]
 
-\textbf{Processing:} The transition records the new CNS obligation $x$ for security $s$ by appending $\mathsf{CNSSet}(s,x)$ to the log, then updates $O_s$:
+\textbf{Processing:} Update the new CNS obligation $x$ for security $s$:
 \[
-L_s' = L_s \cdot \mathsf{CNSSet}(s,x),
-\qquad
 O_s' = x.
 \]
 
@@ -334,12 +327,7 @@ CNS provides updates through MT570 messages or settle batch notifications. These
 \[
 \delta \triangleq \max(0,\ O_s - x).
 \]
-The $\delta$ represents securities that have become available for allocation. If $O_s$ increases (or becomes more negative), $\delta=0$, meaning no new supply is generated.
-
-Then append two log records: $\mathsf{CarryInc}(s,\delta)$ to record the new supply, and $\mathsf{CNSSet}(s,x)$ to record the new obligation:
-\[
-L_s' = L_s \cdot \mathsf{CarryInc}(s,\delta)\cdot \mathsf{CNSSet}(s,x),
-\]
+Then update carry and obligation:
 \[
 U_s' = U_s + \delta,
 \qquad
@@ -359,10 +347,8 @@ New client trades arrive continuously throughout the day:
 
 \textbf{Precondition:} The trade $t$ must be for security $s$, i.e., $sec(t)=s$.
 
-\textbf{Processing:} Append $\mathsf{TradeAdded}(t)$ to the log, then add the trade to the trade set:
+\textbf{Processing:} Add the trade to the trade set:
 \[
-L_s' = L_s \cdot \mathsf{TradeAdded}(t),
-\qquad
 Tr_s' = Tr_s \cup \{t\}.
 \]
 
@@ -392,7 +378,6 @@ The first constraint prevents over-allocation to individual trades; the second e
 \textbf{Processing for Positive Allocations:} For each trade $t$ with $X_t>0$, the system:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
   \item Generates a fresh allocation identifier $id_t\in ID_s$
-  \item Appends $\mathsf{AllocationCreated}(id_t,t,s,X_t)$ to the log
   \item Adds $(id_t,t,X_t)$ to the allocation ledger $A_s$
   \item Increments $qty^{alloc}(t)$ by $X_t$
   \item Sets publication status $P_s(id_t)=\mathsf{pending}$
@@ -416,16 +401,18 @@ Allocations must be communicated to downstream lending systems:
 
 \textbf{Precondition:} The allocation $id$ must be in pending state.
 
-\textbf{Processing:} Append $\mathsf{Published}(id)$ to the log, then update publication status:
+\textbf{Processing (atomic publication):} Within a single atomic transaction, the system:
+\begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
+  \item persists the transition that marks the allocation as published,
+  \item emits the corresponding allocation message to the downstream lending interface,
+  \item and advances the durable input cursor $K_s$ for the consumed $\mathsf{PUBLISH}_s(id)$ trigger record.
+\end{enumerate}
+Formally, the shard state update is:
 \[
-L_s' = L_s \cdot \mathsf{Published}(id),
-\qquad
 P_s'(id)=\mathsf{published}.
 \]
 
-\textbf{Publication Interface Assumption:} We assume the lending system provides idempotent processing: repeated publication attempts with the same $id$ have the same effect as a single publication. This is typically implemented by the lending system maintaining a record of processed allocation identifiers.
-
-\textbf{Retry Semantics:} In practice, publication may fail due to network issues. The system can retry pending publications until successful. The idempotence guarantee ensures retries cause no harm.
+\textbf{Downstream Interface Assumption (recommended):} The lending system \emph{should} process allocations idempotently by allocation identifier $id$. This makes retries safe in the presence of transient delivery failures outside the transactional boundary.
 
 \subsubsection{End-of-Day Reconciliation}
 
@@ -455,25 +442,14 @@ The system must survive crashes without losing consistency:
 \[
 \sigma_s \xrightarrow{\mathsf{CRASH}_s}_s \bot_s.
 \]
-The $\bot_s$ state represents a crashed shard where only persistent storage (log and possibly checkpoints) survives. Volatile runtime state is lost.
+The $\bot_s$ state represents a crashed shard where durable state survives but volatile runtime state is lost.
 
 \textbf{Restart Transition:}
 \[
 \bot_s \xrightarrow{\mathsf{RESTART}_s}_s \sigma_s'.
 \]
 
-\textbf{Recovery via Replay:} On restart, the system reconstructs state by deterministic replay of $L_s$ starting from initial state $\sigma_{0,s}$:
-\begin{itemize}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
-  \item $\mathsf{TradeAdded}(t)$: Add trade $t$ to $Tr_s$
-  \item $\mathsf{CNSSet}(s,x)$: Set $O_s := x$
-  \item $\mathsf{CarryInc}(s,\delta)$: Increase $U_s$ by $\delta$
-  \item $\mathsf{AllocationCreated}(id,t,s,q)$: Add allocation $(id,t,q)$ to $A_s$; update $qty^{alloc}(t)$; decrease $U_s$ by $q$; set $P_s(id):=\mathsf{pending}$ if undefined
-  \item $\mathsf{Published}(id)$: Set $P_s(id):=\mathsf{published}$
-\end{itemize}
-
-\textbf{Replay Well-Formedness:} The log is assumed to be well-formed: allocations never cause $U_s$ to become negative, and each allocation references a trade that exists (was previously added via $\mathsf{TradeAdded}$). This is guaranteed by the write-ahead discipline at runtime.
-
-\textbf{Checkpointing Optimization:} In practice, periodic checkpoints (snapshots of full state) can accelerate recovery by allowing replay to start from a recent checkpoint rather than from initial state.
+\textbf{Recovery Model:} On restart, the shard restores the last \emph{committed} persistent state $(O_s,Tr_s,A_s,U_s,P_s,K_s)$. Processing resumes from the durable message log at position $K_s+1$. Any in-flight (uncommitted) transition at the time of crash is rolled back (i.e., has no visible effect), and its input record is eligible for reprocessing.
 
 % ===================== CONCURRENCY =====================
 \section{Concurrency Properties Induced by Partitioning}
@@ -506,7 +482,7 @@ For all trades $t$ in any reachable state:
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-Only allocation (or replay) increases $qty^{alloc}(t)$, and feasibility enforces $X_t \le qty^{open}(t)$.
+Only allocation increases $qty^{alloc}(t)$, and feasibility enforces $X_t \le qty^{open}(t)$.
 \end{proof}
 
 \begin{proposition}[Non-Negative Carry]
@@ -533,19 +509,19 @@ All allocations draw only from $U_s$, and $U_s$ increases only via obligation de
 \label{sec:exactly-once}
 
 \begin{proposition}[At-Most-Once Publication in the Model]
-For any $id\in ID_s$, $\mathsf{PUBLISH}_s(id)$ occurs at most once.
+For any $id\in ID_s$, $\mathsf{PUBLISH}_s(id)$ transitions the state from $\mathsf{pending}$ to $\mathsf{published}$ and never reverses.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-Publishing moves $P_s(id)$ from pending to published and never reverses.
+Publishing updates $P_s(id)$ monotonically from pending to published.
 \end{proof}
 
 \begin{proposition}[Crash-Safe Publication State]
-If $P_s(id)=\mathsf{published}$ before a crash, then after restart and replay, $P_s(id)=\mathsf{published}$.
+If $P_s(id)=\mathsf{published}$ before a crash, then after restart $P_s(id)=\mathsf{published}$.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-$\mathsf{Published}(id)$ is persisted in $L_s$ and replay sets $P_s(id)$ accordingly.
+$P_s$ is persistent. By the transactional discipline, once the published state is committed it survives crashes.
 \end{proof}
 
 \begin{proposition}[No Lost Allocations Across Crash]
@@ -554,15 +530,17 @@ If $(id,t,q)\in A_s$ before a crash, then $(id,t,q)\in A_s$ after restart.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-$\mathsf{AllocationCreated}(id,t,s,q)$ is persisted and replay reconstructs $A_s$.
+$A_s$ is persistent; committed allocations survive crashes.
 \end{proof}
 
 \begin{proposition}[Exactly-Once Downstream Effect]
-Assuming the lending system is idempotent on allocation identifier $id$, each allocation has exactly-once downstream effect under retries despite crashes.
+Under the transactional discipline (atomic state update + downstream publication + cursor advance), each allocation publication has exactly-once downstream effect under retries despite crashes. If the downstream lending system is additionally idempotent on allocation identifier $id$, the guarantee remains robust even if delivery retries occur outside the transaction boundary.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-At-most-once follows from publication monotonicity and idempotence; at-least-once follows because pending allocations persist and are retried after recovery.
+At-most-once: a committed publication advances the cursor and marks $P_s(id)=\mathsf{published}$, so reprocessing the same trigger cannot re-emit a committed publication.
+At-least-once: if a crash happens before commit, the cursor does not advance and the trigger is reprocessed after restart, leading to eventual publication.
+Downstream idempotence makes any residual duplicate deliveries harmless.
 \end{proof}
 
 % ===================== FAIRNESS =====================
@@ -613,7 +591,7 @@ and (v) only finitely many crashes occur. Then for each security $s$ the system 
 \begin{proof}[Proof sketch]
 After stabilization, $O_s$ is constant so $U_s$ stops increasing. With no new trades, progress comes only from allocation.
 While $U_s>0$ and $Need_s>0$, weak fairness yields allocations that reduce $Need_s$ until either $Need_s=0$ or $U_s=0$,
-implying $\epsilon_s=0$. Crashes do not erase progress because replay restores persistent state.
+implying $\epsilon_s=0$. Crashes do not erase committed progress because persistent state and the durable cursor restore the shard to its last committed point.
 \end{proof}
 
 % ===================== IMPLEMENTATION =====================
@@ -621,9 +599,9 @@ implying $\epsilon_s=0$. Crashes do not erase progress because replay restores p
 
 Each security $s$ can be implemented as a shard with:
 \begin{itemize}[leftmargin=*]
-  \item durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
-  \item \kfeat{WAL} $L_s$ (or equivalent transactional log),
-  \item an event processor consuming per-security events,
+  \item a durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
+  \item a \kfeat{durable ordered message log} providing per-security input streams and a \kfeat{durable cursor} $K_s$,
+  \item a \kfeat{transactional processing engine} that commits \emph{atomically}: (i) state updates, (ii) downstream publication (or an outbox/outbound stream append), and (iii) cursor advancement,
   \item a \kfeat{strategy plugin} implementing $\mathsf{Strategy}_s$,
   \item a publisher that retries \kfeat{pending allocations} until \kfeat{published}.
 \end{itemize}
