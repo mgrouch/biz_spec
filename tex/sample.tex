@@ -142,11 +142,11 @@ Each trade $t \in T$ represents a client transaction requiring settlement. Trade
 \begin{aligned}
 client(t) &\in C, &&\text{the client who executed the trade}\\
 sec(t) &\in S, &&\text{the security being traded}\\
-qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled (signed: 
-\hfill\break 
-$>0$ receive, $<0$ deliver)}
+qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled}
 \end{aligned}
 \]
+\hfill\break 
+(signed: $>0$ receive, $<0$ deliver)
 
 \paragraph{Quantity sign and direction.}
 Trade and allocation quantities in this model use a \emph{signed} convention:
@@ -630,6 +630,7 @@ $P_s$ is persistent. By the transactional discipline, once the published state i
 \end{proof}
 
 \begin{proposition}[No Lost Allocations Across Crash]
+\hfill\break
 If $(id,t,q)\in A_s$ before a crash, then $(id,t,q)\in A_s$ after restart.
 \end{proposition}
 
