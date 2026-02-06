@@ -323,7 +323,7 @@ For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_
         (notably for $\mathsf{CLIENT\_TRADE}_s(t)$ and $\mathsf{PUBLISH}_s(id)$),
   \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
 \end{enumerate}
-If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records. This is the sole crash-recovery mechanism required by the design (no separate per-shard WAL is assumed).
+If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records. 
 
 \subsection{Derived Quantities}
 
@@ -706,7 +706,7 @@ implying $\epsilon_s=0$. Crashes do not erase committed progress because persist
 \end{proof}
 
 % ===================== IMPLEMENTATION =====================
-\section{Implementation Notes (Non-Normative)}
+\section{Implementation Notes}
 
 Each security $s$ can be implemented as a shard with:
 \begin{itemize}[leftmargin=*]
