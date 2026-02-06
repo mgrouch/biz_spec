@@ -186,13 +186,18 @@ The allocatable settled flow for security $s$ induced by an obligation update is
 \[
 \Delta settle(s) \triangleq
 \begin{cases}
-O_{prev}(s) - O_{new}(s),
-& \text{if } \sgn(O_{prev}(s))=\sgn(O_{new}(s))\ \wedge\ |O_{new}(s)|<|O_{prev}(s)|,\\
+O_{prev}(s)-O_{new}(s),
+& \begin{aligned}
+  &\text{if } \sgn(O_{prev}(s))=\sgn(O_{new}(s))\\
+  &\wedge\ |O_{new}(s)|<|O_{prev}(s)|
+\end{aligned}
+\\[2pt]
 O_{prev}(s),
 & \text{if } \sgn(O_{prev}(s))\neq \sgn(O_{new}(s)),\\
 0, & \text{otherwise.}
 \end{cases}
 \]
+
 A positive $\Delta settle(s)$ means PB \emph{received} securities; a negative value means PB \emph{delivered} securities.
 
 % ===================== PARTITIONED LTS =====================
@@ -307,7 +312,7 @@ All components $(O_s,Tr_s,A_s,U_s,P_s,K_s)$ are persistent and survive crashes. 
 
 where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 
-\subsection{Transactional Processing Discipline (Normative)}
+\subsection{Transactional Processing Discipline}
 
 \khead{Atomicity assumption (exactly-once engine):}
 For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
@@ -392,7 +397,7 @@ Formally, the shard state update is:
 Tr_s' = Tr_s \cup \{t\}.
 \]
 
-\textbf{Downstream Interface Assumption (recommended):} The lending system \emph{should} process trade-arrival messages idempotently by trade identifier $t$ so that any retries outside the transactional boundary are harmless.
+\textbf{Downstream Interface Assumption:} The lending system \emph{should} process trade-arrival messages idempotently by trade identifier $t$ so that any retries outside the transactional boundary are harmless.
 
 \textbf{Note:} The trade's total quantity $qty^{tot}(t)$ is immutable and recorded when the trade is added. Initially, $qty^{alloc}(t)=0$ and $qty^{open}(t)=qty^{tot}(t)$.
 
@@ -470,7 +475,7 @@ Formally, the shard state update is:
 P_s'(id)=\mathsf{published}.
 \]
 
-\textbf{Downstream Interface Assumption (recommended):} The lending system \emph{should} process allocations idempotently by allocation identifier $id$. This makes retries safe in the presence of transient delivery failures outside the transactional boundary.
+\textbf{Downstream Interface Assumption:} The lending system \emph{should} process allocations idempotently by allocation identifier $id$. This makes retries safe in the presence of transient delivery failures outside the transactional boundary.
 
 \subsubsection{End-of-Day Reconciliation}
 
