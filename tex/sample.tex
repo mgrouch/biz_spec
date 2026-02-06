@@ -275,7 +275,7 @@ where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 
 \subsection{Write-Ahead Logging Discipline}
 
-For any transition that mutates persistent state, the system must append a corresponding record to $L_s$ \emph{before} the mutation becomes visible.
+For any transition that mutates persistent state, the system must append a corresponding record to $L_s$ \emph{before} the mutation becomes visible. This discipline ensures crash recovery: after a crash and restart, the system can reconstruct the exact state by replaying all log records in order, starting from the initial empty state.
 
 \subsubsection{Log Record Types}
 
@@ -291,41 +291,52 @@ For any transition that mutates persistent state, the system must append a corre
 \right\}.
 \end{equation*}
 
+Each log record captures sufficient information to reconstruct the state change during recovery. For example, $\mathsf{CarryInc}(s,\delta)$ records both the security identifier and the quantity of settlement supply that became available.
+
 \subsection{Derived Quantities}
 
 \[
 Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
 \]
+This $Need_s$ represents the total settlement demand from all client trades for security $s$. It guides allocation decisions and appears in the end-of-day reconciliation equation.
 
 % ===================== TRANSITIONS =====================
-\subsection{Per-Shard Transition Relation}
+\subsection{Per-Shard Transition Relation: Detailed Explanations}
+
+The following transitions define the core operational behavior of each security shard. Each transition follows the write-ahead logging discipline: the corresponding log record is appended to $L_s$ \emph{before} the state mutation takes effect.
 
 \subsubsection{Start-of-Day Reconciliation}
 
+The system reconciles with CNS at start of day to establish the initial obligation position:
 \[
 \sigma_s \xrightarrow{\mathsf{SOD\_RECON}_s(x)}_s \sigma_s'
 \]
+
+\textbf{Processing:} The transition records the new CNS obligation $x$ for security $s$ by appending $\mathsf{CNSSet}(s,x)$ to the log, then updates $O_s$:
 \[
 L_s' = L_s \cdot \mathsf{CNSSet}(s,x),
 \qquad
 O_s' = x.
 \]
 
+\textbf{Purpose:} This establishes the baseline for tracking settlement supply. If $x>0$, it represents an initial receive obligation from CNS; if $x\leq 0$, no initial settlement supply exists.
+
 \subsubsection{CNS Updates (MT570, Settle Batch)}
 
-For $x\in\mathbb{Z}$:
+CNS provides updates through MT570 messages or settle batch notifications. These transitions handle changes to CNS obligations:
 \[
 \sigma_s \xrightarrow{\mathsf{MT570}_s(x)}_s \sigma_s'
 \quad\text{or}\quad
 \sigma_s \xrightarrow{\mathsf{SETTLE\_BATCH}_s(x)}_s \sigma_s'.
 \]
 
-Compute:
+\textbf{Processing:} First compute the settlement supply $\delta$, which captures any decrease in receive obligations:
 \[
 \delta \triangleq \max(0,\ O_s - x).
 \]
+The $\delta$ represents securities that have become available for allocation. If $O_s$ increases (or becomes more negative), $\delta=0$, meaning no new supply is generated.
 
-Append then apply:
+Then append two log records: $\mathsf{CarryInc}(s,\delta)$ to record the new supply, and $\mathsf{CNSSet}(s,x)$ to record the new obligation:
 \[
 L_s' = L_s \cdot \mathsf{CarryInc}(s,\delta)\cdot \mathsf{CNSSet}(s,x),
 \]
@@ -335,113 +346,134 @@ U_s' = U_s + \delta,
 O_s' = x.
 \]
 
+\textbf{Business Logic:} Only decreases in positive obligations yield settlement supply. Increases in obligations (or movements from deliver to receive) do not create supply. This matches the physical reality: the PB can only allocate securities it has actually received from CNS.
+
 \subsubsection{Client Trade Arrival}
 
+New client trades arrive continuously throughout the day:
 \[
 \sigma_s \xrightarrow{\mathsf{CLIENT\_TRADE}_s(t)}_s \sigma_s'
 \qquad
 (sec(t)=s)
 \]
+
+\textbf{Precondition:} The trade $t$ must be for security $s$, i.e., $sec(t)=s$.
+
+\textbf{Processing:} Append $\mathsf{TradeAdded}(t)$ to the log, then add the trade to the trade set:
 \[
 L_s' = L_s \cdot \mathsf{TradeAdded}(t),
 \qquad
 Tr_s' = Tr_s \cup \{t\}.
 \]
 
+\textbf{Note:} The trade's total quantity $qty^{tot}(t)$ is immutable and recorded when the trade is added. Initially, $qty^{alloc}(t)=0$ and $qty^{open}(t)=qty^{tot}(t)$.
+
 \subsubsection{Allocation (Pluggable, Partial)}
 
+This is the core transition where settlement supply is allocated to client trades:
 \[
 \sigma_s \xrightarrow{\mathsf{ALLOCATE}_s}_s \sigma_s'
 \]
 
-The allocation strategy is a total function:
+\textbf{Strategy Invocation:} The system invokes the pluggable allocation strategy:
 \[
 \mathsf{Strategy}_s : (Tr_s,\ U_s,\ \Theta_s) \rightarrow \{X_t\}_{t\in Tr_s}
 \]
-where each $X_t \in \mathbb{Z}_{\ge 0}$ and:
+where each $X_t \in \mathbb{Z}_{\ge 0}$ represents the quantity to allocate to trade $t$.
+
+\textbf{Feasibility Constraints:} The strategy must respect:
 \[
 \forall t\in Tr_s:\ 0 \le X_t \le qty^{open}(t),
 \qquad
 \sum_{t\in Tr_s} X_t \le U_s.
 \]
+The first constraint prevents over-allocation to individual trades; the second ensures the allocation doesn't exceed available supply.
 
-For each $t$ with $X_t>0$, choose a fresh $id_t\in ID_s$. Define:
+\textbf{Processing for Positive Allocations:} For each trade $t$ with $X_t>0$, the system:
+\begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
+  \item Generates a fresh allocation identifier $id_t\in ID_s$
+  \item Appends $\mathsf{AllocationCreated}(id_t,t,s,X_t)$ to the log
+  \item Adds $(id_t,t,X_t)$ to the allocation ledger $A_s$
+  \item Increments $qty^{alloc}(t)$ by $X_t$
+  \item Sets publication status $P_s(id_t)=\mathsf{pending}$
+\end{enumerate}
+
+\textbf{Supply Reduction:} The total allocated quantity is deducted from unallocated carry:
 \[
-\mathsf{AllocRecs} \triangleq \langle\, \mathsf{AllocationCreated}(id_t,t,s,X_t)\ \mid\ t\in Tr_s,\ X_t>0\,\rangle.
+U_s' = U_s - \sum_{t\in Tr_s} X_t.
 \]
 
-Append then apply:
-\[
-L_s' = L_s \cdot \mathsf{AllocRecs},
-\]
-\[
-A_s' = A_s \cup \{(id_t,t,X_t)\mid X_t>0\},
-\]
-\[
-\forall t\in Tr_s:\ qty^{alloc}(t) := qty^{alloc}(t) + X_t,
-\qquad
-U_s' = U_s - \sum_{t\in Tr_s} X_t,
-\]
-\[
-\forall t\in Tr_s:\ (X_t>0) \Rightarrow P_s'(id_t)=\mathsf{pending}.
-\]
+\textbf{Partial Allocation Behavior:} The strategy may allocate zero to some or all trades. If $X_t=0$ for all $t$, then $U_s$ remains unchanged, representing explicit carry forward. This allows the system to handle partial settlements: when insufficient supply exists to satisfy all demand, the strategy determines which trades get allocation and in what amounts.
 
 \subsubsection{Exactly-Once Publication to Lending}
 
+Allocations must be communicated to downstream lending systems:
 \[
 \sigma_s \xrightarrow{\mathsf{PUBLISH}_s(id)}_s \sigma_s'
 \qquad
 (P_s(id)=\mathsf{pending})
 \]
+
+\textbf{Precondition:} The allocation $id$ must be in pending state.
+
+\textbf{Processing:} Append $\mathsf{Published}(id)$ to the log, then update publication status:
 \[
 L_s' = L_s \cdot \mathsf{Published}(id),
 \qquad
 P_s'(id)=\mathsf{published}.
 \]
 
-\paragraph{Publication Interface Assumption.}
-The lending system is idempotent on $id$: repeated sends with the same $id$ have a single effective downstream effect.
+\textbf{Publication Interface Assumption:} We assume the lending system provides idempotent processing: repeated publication attempts with the same $id$ have the same effect as a single publication. This is typically implemented by the lending system maintaining a record of processed allocation identifiers.
+
+\textbf{Retry Semantics:} In practice, publication may fail due to network issues. The system can retry pending publications until successful. The idempotence guarantee ensures retries cause no harm.
 
 \subsubsection{End-of-Day Reconciliation}
 
+At end of day, the system reconciles its internal state with CNS obligations:
 \[
 \sigma_s \xrightarrow{\mathsf{EOD\_RECON}_s}_s \sigma_s'
 \]
+
+\textbf{Discrepancy Calculation:} Compute the difference between what CNS says should be available and what the system tracks:
 \[
 \epsilon_s \triangleq \max(0,O_s) - (Need_s + U_s).
 \]
-The system records $\epsilon_s$ externally (break table). State remains unchanged:
+Here $\max(0,O_s)$ represents securities CNS indicates are available (only positive obligations count). The term $(Need_s + U_s)$ represents what the system tracks: open trade demand plus unallocated carry.
+
+\textbf{Processing:} The discrepancy $\epsilon_s$ is recorded externally (e.g., in a break table for investigation). The shard state itself remains unchanged:
 \[
 \sigma_s' = \sigma_s.
 \]
 
+\textbf{Interpretation:} A positive $\epsilon_s$ suggests the system has allocated less than what CNS indicates is available (potential under-allocation). A negative $\epsilon_s$ suggests the system has allocated more than available (impossible under our invariants). Under normal operation, $\epsilon_s$ should be zero.
+
 \subsubsection{Crash and Restart}
 
-Crash:
+The system must survive crashes without losing consistency:
+
+\textbf{Crash Transition:}
 \[
 \sigma_s \xrightarrow{\mathsf{CRASH}_s}_s \bot_s.
 \]
+The $\bot_s$ state represents a crashed shard where only persistent storage (log and possibly checkpoints) survives. Volatile runtime state is lost.
 
-Restart:
+\textbf{Restart Transition:}
 \[
 \bot_s \xrightarrow{\mathsf{RESTART}_s}_s \sigma_s'.
 \]
 
-On restart, reconstruct by deterministic replay of $L_s$ starting from $\sigma_{0,s}$:
-\begin{itemize}[leftmargin=*]
-  \item $\mathsf{TradeAdded}(t)$: $Tr_s := Tr_s \cup \{t\}$.
-  \item $\mathsf{CNSSet}(s,x)$: $O_s := x$.
-  \item $\mathsf{CarryInc}(s,\delta)$: $U_s := U_s + \delta$.
-  \item $\mathsf{AllocationCreated}(id,t,s,q)$:
-        $A_s := A_s \cup \{(id,t,q)\}$;
-        if $P_s(id)$ undefined then $P_s(id):=\mathsf{pending}$;
-        $qty^{alloc}(t):=qty^{alloc}(t)+q$;
-        $U_s := U_s - q$.
-  \item $\mathsf{Published}(id)$: $P_s(id):=\mathsf{published}$.
+\textbf{Recovery via Replay:} On restart, the system reconstructs state by deterministic replay of $L_s$ starting from initial state $\sigma_{0,s}$:
+\begin{itemize}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
+  \item $\mathsf{TradeAdded}(t)$: Add trade $t$ to $Tr_s$
+  \item $\mathsf{CNSSet}(s,x)$: Set $O_s := x$
+  \item $\mathsf{CarryInc}(s,\delta)$: Increase $U_s$ by $\delta$
+  \item $\mathsf{AllocationCreated}(id,t,s,q)$: Add allocation $(id,t,q)$ to $A_s$; update $qty^{alloc}(t)$; decrease $U_s$ by $q$; set $P_s(id):=\mathsf{pending}$ if undefined
+  \item $\mathsf{Published}(id)$: Set $P_s(id):=\mathsf{published}$
 \end{itemize}
 
-\paragraph{Replay Well-Formedness.}
-Replay assumes feasibility (no negative $U_s$) and that each allocation references a known trade.
+\textbf{Replay Well-Formedness:} The log is assumed to be well-formed: allocations never cause $U_s$ to become negative, and each allocation references a trade that exists (was previously added via $\mathsf{TradeAdded}$). This is guaranteed by the write-ahead discipline at runtime.
+
+\textbf{Checkpointing Optimization:} In practice, periodic checkpoints (snapshots of full state) can accelerate recovery by allowing replay to start from a recent checkpoint rather than from initial state.
 
 % ===================== CONCURRENCY =====================
 \section{Concurrency Properties Induced by Partitioning}
