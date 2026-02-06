@@ -451,6 +451,36 @@ The $\bot_s$ state represents a crashed shard where durable state survives but v
 
 \textbf{Recovery Model:} On restart, the shard restores the last \emph{committed} persistent state $(O_s,Tr_s,A_s,U_s,P_s,K_s)$. Processing resumes from the durable message log at position $K_s+1$. Any in-flight (uncommitted) transition at the time of crash is rolled back (i.e., has no visible effect), and its input record is eligible for reprocessing.
 
+\subsection{Allocation Strategy as an Operator}
+\label{sec:alloc-operator}
+
+For a fixed security $s$, define the open-demand vector over shard trades:
+\[
+open_s(t)\triangleq qty^{open}(t)\ \ (t\in Tr_s),
+\qquad
+Open_s \in \mathbb{Z}_{\ge 0}^{Tr_s}.
+\]
+
+We model the pluggable allocation strategy as an operator that produces an allocation plan:
+\[
+\mathcal{F}_{s,\Theta}:\ (Tr_s,\ Open_s,\ U_s)\ \to\ X \in \mathbb{Z}_{\ge 0}^{Tr_s}.
+\]
+(Equivalently, $\mathcal{F}_{s,\Theta}$ may be treated as a relation to allow multiple admissible plans.)
+
+\paragraph{Core operator properties.}
+For any output plan $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$:
+\begin{enumerate}[leftmargin=*]
+  \item \khead{Feasibility:}
+  $\forall t\in Tr_s:\ 0\le X_t \le open_s(t)$ and $\sum_{t\in Tr_s} X_t \le U_s$.
+  \item \khead{Eligibility compliance (if applicable):}
+  if $\neg eligible_s(t)$ then $X_t=0$.
+  \item \khead{Work-conserving (recommended):}
+  if $U_s>0$ and $\exists t: eligible_s(t)\wedge open_s(t)>0$ then $\sum_t X_t>0$.
+  \item \khead{Commit-stability (recommended):}
+  the plan depends only on committed shard state and $\Theta_s$; any nondeterminism is seeded from persisted data.
+\end{enumerate}
+
+
 % ===================== CONCURRENCY =====================
 \section{Concurrency Properties Induced by Partitioning}
 \label{sec:concurrency}
