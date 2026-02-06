@@ -1,0 +1,588 @@
+\documentclass[sigconf]{acmart}
+
+% ===================== Packages =====================
+\usepackage[T1]{fontenc}
+\usepackage{mathtools}
+\usepackage{microtype}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{graphicx}   % for \resizebox (fit-to-column helpers)
+
+% Helpers: scale only when needed
+\newcommand{\fitcol}[1]{\resizebox{\columnwidth}{!}{$\displaystyle #1$}}
+\newcommand{\fitcoltext}[1]{\resizebox{\columnwidth}{!}{$#1$}}
+
+% ===================== Theorems =====================
+
+% ---- Theorem headings that pop (no boxes, no color) ----
+\usepackage{amsthm}
+
+\newtheoremstyle{pbplain}
+  {6pt}{6pt}{\itshape}{0pt}{\bfseries}{.}{0.6em}
+  {\textsc{\bfseries\thmname{#1}}\thmnumber{ #2}\thmnote{ \bfseries(#3)}}
+
+\newtheoremstyle{pbdef}
+  {6pt}{6pt}{\normalfont}{0pt}{\bfseries}{.}{0.6em}
+  {\textsc{\bfseries\thmname{#1}}\thmnumber{ #2}\thmnote{ \bfseries(#3)}}
+
+\theoremstyle{pbdef}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+
+\theoremstyle{pbplain}
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+
+% ===================== ACM Metadata / Suppression =====================
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+\acmDOI{}
+\acmISBN{}
+\acmConference{}{}{}
+\acmBooktitle{}
+\acmYear{}
+
+% Provide a short title without line breaks for PDF metadata
+\title[PB CNS Settlement Allocation System]{Prime Brokerage CNS Settlement Allocation System: Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
+
+% Full (typeset) title can still contain line breaks
+\title{Prime Brokerage CNS Settlement Allocation System\\
+with Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
+
+\author{}
+\affiliation{%
+  \institution{}
+  \city{}
+  \country{}
+}
+\date{}
+
+\begin{document}
+
+
+% ===================== ABSTRACT =====================
+\begin{abstract}
+This document formally specifies a Prime Brokerage (PB) settlement allocation system as a labeled transition system (LTS). The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities across client trades. Key features include: security-identifier partitioning for parallel processing, exactly-once publication guarantees to downstream lending systems, crash recovery via write-ahead logging, and support for partial settlements. The formal model enables rigorous reasoning about correctness, fault tolerance, and progress properties.
+\end{abstract}
+
+\maketitle
+
+% ===================== INTRODUCTION =====================
+\section{Introduction and Overview}
+
+In prime brokerage operations, securities settlement through Continuous Net Settlement (CNS)
+systems presents complex challenges. The prime broker acts as a single participant in CNS,
+receiving netted obligations for each security. Simultaneously, the PB services numerous
+clients whose individual trades must be settled using the securities received through CNS.
+This document specifies a system that bridges these two worlds: it allocates CNS-settled
+quantities across client trades according to configurable strategies, handles partial
+settlements, ensures exactly-once publication of allocations to downstream lending systems,
+and maintains consistency even in the face of failures.
+
+\subsection{Core Challenges and Solutions}
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Partitioning for Scalability}: Processing is partitioned by security identifier, allowing independent and parallel processing per security while preserving correctness.
+  \item \textbf{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after crashes.
+  \item \textbf{Partial Settlement Support}: The system must handle cases where only partial quantities of securities are available for allocation across client trades.
+  \item \textbf{Crash Recovery}: The system must recover deterministically from failures without losing allocated state.
+  \item \textbf{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
+\end{enumerate}
+
+\subsection{Modeling Approach}
+
+\begin{enumerate}[leftmargin=*]
+  \item Define the global system as a product of per-security shards (Section~\ref{sec:partitioned-lts})
+  \item Specify per-shard state and transitions (Section~\ref{sec:per-shard})
+  \item Establish correctness invariants and safety properties (Section~\ref{sec:safety})
+  \item Prove exactly-once publication and crash recovery guarantees (Section~\ref{sec:exactly-once})
+  \item Define fairness and progress properties (Section~\ref{sec:fairness})
+  \item Demonstrate end-of-day convergence (Section~\ref{sec:reconciliation})
+\end{enumerate}
+
+% ===================== DOMAINS =====================
+\section{Domains and Notation}
+\label{sec:domains}
+
+\subsection{Sets and Types}
+
+\begin{itemize}[leftmargin=*]
+  \item $S$ : finite set of security identifiers (partition keys).
+  \item $C$ : finite set of client identifiers.
+  \item $T$ : finite set of trade identifiers.
+  \item $ID$ : finite set of allocation identifiers.
+  \item $\mathbb{Z}$ : integers (positive, negative, and zero).
+  \item $\mathbb{Z}_{\ge 0}$ : non-negative integers.
+\end{itemize}
+
+\subsection{Trade Representation}
+
+Each trade $t \in T$ represents a client transaction requiring settlement. Trades have immutable attributes recorded at creation:
+\[
+\begin{aligned}
+client(t) &\in C, &&\text{the client who executed the trade}\\
+sec(t) &\in S, &&\text{the security being traded}\\
+qty^{tot}(t) &\in \mathbb{Z}_{\ge 0}, &&\text{total quantity to be settled}
+\end{aligned}
+\]
+
+The system tracks allocated quantity per trade:
+\[
+qty^{alloc}(t) \in \mathbb{Z}_{\ge 0}, \quad 0 \le qty^{alloc}(t) \le qty^{tot}(t),
+\]
+and computes open (unallocated) quantity:
+\[
+qty^{open}(t) \triangleq qty^{tot}(t) - qty^{alloc}(t).
+\]
+
+\subsection{CNS Obligations and Settlement Supply}
+
+CNS messages may cover multiple securities, so we model them as partial maps:
+\[
+M : S \rightharpoonup \mathbb{Z}.
+\]
+
+For each security $s \in S$, CNS provides the PB's net open obligation $O(s)\in\mathbb{Z}$.
+A positive $O(s)$ indicates CNS owes securities to PB (receive), while negative indicates PB owes CNS (deliver).
+
+The system only allocates settlement supply derived from decreases in receive obligations:
+\[
+\Delta settle(s) \triangleq \max(0, O_{prev}(s) - O_{new}(s)).
+\]
+
+% ===================== PARTITIONED LTS =====================
+\section{System as a Partitioned Labeled Transition System}
+\label{sec:partitioned-lts}
+
+\subsection{Per-Security Shards}
+
+For each security $s \in S$, define a per-security shard as a labeled transition system:
+\[
+\mathcal{PB}_s = (\mathcal{S}_s, \mathcal{A}_s, \rightarrow_s, \sigma_{0,s}),
+\]
+where $\rightarrow_s \subseteq \mathcal{S}_s \times \mathcal{A}_s \times \mathcal{S}_s$.
+
+\subsection{Global System Composition}
+
+The global system is the product of all shards:
+\[
+\mathcal{PB} =
+\left(\prod_{s\in S}\mathcal{S}_s,\ \mathcal{A},\ \rightarrow,\ \prod_{s\in S}\sigma_{0,s}\right).
+\]
+
+\subsection{Global Event Routing and Demultiplexing}
+
+Let $\mathcal{E}$ be the set of all incoming events/messages. Each event $e\in\mathcal{E}$ has a security routing key:
+\[
+key : \mathcal{E} \rightarrow S.
+\]
+
+\textbf{Routing Rules:}
+\begin{itemize}[leftmargin=*]
+  \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
+  \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
+  \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
+\end{itemize}
+
+\textbf{Demultiplexing:}
+\[
+\mathsf{MSG}(M) \equiv \{\, \mathsf{MSG}_s(M(s)) \mid s \in dom(M)\,\}.
+\]
+
+\subsection{Global Transition Relation}
+
+Let the global state be $\sigma = \langle \sigma_s \rangle_{s\in S}$. For any event $e$:
+\[
+\sigma \xrightarrow{e} \sigma'
+\ \text{iff}\
+\sigma_{key(e)} \xrightarrow{e}_{key(e)} \sigma_{key(e)}'
+\ \wedge\
+\forall s'\neq key(e):\ \sigma_{s'}'=\sigma_{s'}.
+\]
+
+% ===================== PER-SHARD =====================
+\section{Per-Shard State, Actions, and Transitions}
+\label{sec:per-shard}
+
+\subsection{Per-Shard State Components}
+
+For a fixed security $s\in S$, shard state:
+\[
+\sigma_s = (O_s,\ Tr_s,\ A_s,\ U_s,\ P_s,\ L_s,\ \Theta_s).
+\]
+
+\begin{itemize}[leftmargin=*]
+  \item $O_s\in\mathbb{Z}$: current CNS open obligation for security $s$.
+  \item $Tr_s\subseteq T$: set of trades with $sec(t)=s$.
+  \item $A_s\subseteq ID_s\times T\times\mathbb{Z}_{\ge 0}$: allocation ledger, tuples $(id,t,q)$.
+  \item $U_s\in\mathbb{Z}_{\ge 0}$: unallocated settlement carry.
+  \item $P_s:ID_s\rightharpoonup\{\mathsf{pending},\mathsf{published}\}$: publication status map.
+  \item $L_s=\langle e_1,\dots,e_n\rangle$: persistent append-only log (WAL).
+  \item $\Theta_s$: configuration and strategy parameters.
+\end{itemize}
+
+\paragraph{Local Identifier Spaces.}
+\[
+ID = \biguplus_{s\in S} ID_s,
+\quad \text{and}\quad
+\forall id\in ID_s:\ sec(id)=s.
+\]
+
+\subsection{Persistence Model}
+
+All components $(O_s,Tr_s,A_s,U_s,P_s,L_s)$ are persistent and survive crashes. Runtime-only structures are volatile and omitted.
+
+\subsection{Initial State}
+
+\[
+\sigma_{0,s} = (0,\ \emptyset,\ \emptyset,\ 0,\ \emptyset,\ \langle\rangle,\ \Theta_s).
+\]
+
+\subsection{Per-Shard Actions}
+
+\begin{equation*}
+\mathcal{A}_s \supseteq
+\left\{
+\vphantom{\sum_{i=1}^{n}}
+\begin{aligned}
+\mathsf{SOD\_RECON}_s(x),\ &\mathsf{MT570}_s(x),\\
+\mathsf{SETTLE\_BATCH}_s(x),\ &\mathsf{CLIENT\_TRADE}_s(t),\\
+\mathsf{ALLOCATE}_s,\ &\mathsf{PUBLISH}_s(id),\\
+\mathsf{EOD\_RECON}_s,\ &\mathsf{CRASH}_s,\\
+\mathsf{RESTART}_s &
+\end{aligned}
+\right\}
+\end{equation*}
+
+where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
+
+\subsection{Write-Ahead Logging Discipline}
+
+For any transition that mutates persistent state, the system must append a corresponding record to $L_s$ \emph{before} the mutation becomes visible.
+
+\subsubsection{Log Record Types}
+
+\begin{equation*}
+\mathsf{LogRec}_s \in
+\left\{
+\vphantom{\sum_{i=1}^{n}}
+\begin{aligned}
+\mathsf{TradeAdded}(t),\ &\mathsf{CNSSet}(s,x),\\
+\mathsf{CarryInc}(s,\delta),\ &\mathsf{AllocationCreated}(id,t,s,q),\\
+\mathsf{Published}(id) &
+\end{aligned}
+\right\}.
+\end{equation*}
+
+\subsection{Derived Quantities}
+
+\[
+Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
+\]
+
+% ===================== TRANSITIONS =====================
+\subsection{Per-Shard Transition Relation}
+
+\subsubsection{Start-of-Day Reconciliation}
+
+\[
+\sigma_s \xrightarrow{\mathsf{SOD\_RECON}_s(x)}_s \sigma_s'
+\]
+\[
+L_s' = L_s \cdot \mathsf{CNSSet}(s,x),
+\qquad
+O_s' = x.
+\]
+
+\subsubsection{CNS Updates (MT570, Settle Batch)}
+
+For $x\in\mathbb{Z}$:
+\[
+\sigma_s \xrightarrow{\mathsf{MT570}_s(x)}_s \sigma_s'
+\quad\text{or}\quad
+\sigma_s \xrightarrow{\mathsf{SETTLE\_BATCH}_s(x)}_s \sigma_s'.
+\]
+
+Compute:
+\[
+\delta \triangleq \max(0,\ O_s - x).
+\]
+
+Append then apply:
+\[
+L_s' = L_s \cdot \mathsf{CarryInc}(s,\delta)\cdot \mathsf{CNSSet}(s,x),
+\]
+\[
+U_s' = U_s + \delta,
+\qquad
+O_s' = x.
+\]
+
+\subsubsection{Client Trade Arrival}
+
+\[
+\sigma_s \xrightarrow{\mathsf{CLIENT\_TRADE}_s(t)}_s \sigma_s'
+\qquad
+(sec(t)=s)
+\]
+\[
+L_s' = L_s \cdot \mathsf{TradeAdded}(t),
+\qquad
+Tr_s' = Tr_s \cup \{t\}.
+\]
+
+\subsubsection{Allocation (Pluggable, Partial)}
+
+\[
+\sigma_s \xrightarrow{\mathsf{ALLOCATE}_s}_s \sigma_s'
+\]
+
+The allocation strategy is a total function:
+\[
+\mathsf{Strategy}_s : (Tr_s,\ U_s,\ \Theta_s) \rightarrow \{X_t\}_{t\in Tr_s}
+\]
+where each $X_t \in \mathbb{Z}_{\ge 0}$ and:
+\[
+\forall t\in Tr_s:\ 0 \le X_t \le qty^{open}(t),
+\qquad
+\sum_{t\in Tr_s} X_t \le U_s.
+\]
+
+For each $t$ with $X_t>0$, choose a fresh $id_t\in ID_s$. Define:
+\[
+\mathsf{AllocRecs} \triangleq \langle\, \mathsf{AllocationCreated}(id_t,t,s,X_t)\ \mid\ t\in Tr_s,\ X_t>0\,\rangle.
+\]
+
+Append then apply:
+\[
+L_s' = L_s \cdot \mathsf{AllocRecs},
+\]
+\[
+A_s' = A_s \cup \{(id_t,t,X_t)\mid X_t>0\},
+\]
+\[
+\forall t\in Tr_s:\ qty^{alloc}(t) := qty^{alloc}(t) + X_t,
+\qquad
+U_s' = U_s - \sum_{t\in Tr_s} X_t,
+\]
+\[
+\forall t\in Tr_s:\ (X_t>0) \Rightarrow P_s'(id_t)=\mathsf{pending}.
+\]
+
+\subsubsection{Exactly-Once Publication to Lending}
+
+\[
+\sigma_s \xrightarrow{\mathsf{PUBLISH}_s(id)}_s \sigma_s'
+\qquad
+(P_s(id)=\mathsf{pending})
+\]
+\[
+L_s' = L_s \cdot \mathsf{Published}(id),
+\qquad
+P_s'(id)=\mathsf{published}.
+\]
+
+\paragraph{Publication Interface Assumption.}
+The lending system is idempotent on $id$: repeated sends with the same $id$ have a single effective downstream effect.
+
+\subsubsection{End-of-Day Reconciliation}
+
+\[
+\sigma_s \xrightarrow{\mathsf{EOD\_RECON}_s}_s \sigma_s'
+\]
+\[
+\epsilon_s \triangleq \max(0,O_s) - (Need_s + U_s).
+\]
+The system records $\epsilon_s$ externally (break table). State remains unchanged:
+\[
+\sigma_s' = \sigma_s.
+\]
+
+\subsubsection{Crash and Restart}
+
+Crash:
+\[
+\sigma_s \xrightarrow{\mathsf{CRASH}_s}_s \bot_s.
+\]
+
+Restart:
+\[
+\bot_s \xrightarrow{\mathsf{RESTART}_s}_s \sigma_s'.
+\]
+
+On restart, reconstruct by deterministic replay of $L_s$ starting from $\sigma_{0,s}$:
+\begin{itemize}[leftmargin=*]
+  \item $\mathsf{TradeAdded}(t)$: $Tr_s := Tr_s \cup \{t\}$.
+  \item $\mathsf{CNSSet}(s,x)$: $O_s := x$.
+  \item $\mathsf{CarryInc}(s,\delta)$: $U_s := U_s + \delta$.
+  \item $\mathsf{AllocationCreated}(id,t,s,q)$:
+        $A_s := A_s \cup \{(id,t,q)\}$;
+        if $P_s(id)$ undefined then $P_s(id):=\mathsf{pending}$;
+        $qty^{alloc}(t):=qty^{alloc}(t)+q$;
+        $U_s := U_s - q$.
+  \item $\mathsf{Published}(id)$: $P_s(id):=\mathsf{published}$.
+\end{itemize}
+
+\paragraph{Replay Well-Formedness.}
+Replay assumes feasibility (no negative $U_s$) and that each allocation references a known trade.
+
+% ===================== CONCURRENCY =====================
+\section{Concurrency Properties Induced by Partitioning}
+\label{sec:concurrency}
+
+\begin{proposition}[Cross-Shard Commutativity]
+If $key(e_1)\neq key(e_2)$ then the events commute:
+\[
+(\sigma \xrightarrow{e_1} \sigma_1 \xrightarrow{e_2} \sigma_{12})
+\Rightarrow
+(\sigma \xrightarrow{e_2} \sigma_2 \xrightarrow{e_1} \sigma_{21})
+\wedge
+\sigma_{12}=\sigma_{21}.
+\]
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+By definition of the global transition relation, each event updates only its keyed shard and leaves all other shards unchanged.
+\end{proof}
+
+% ===================== SAFETY =====================
+\section{Safety Properties}
+\label{sec:safety}
+
+\begin{proposition}[No Over-Allocation]
+For all trades $t$ in any reachable state:
+\[
+0 \le qty^{alloc}(t) \le qty^{tot}(t).
+\]
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Only allocation (or replay) increases $qty^{alloc}(t)$, and feasibility enforces $X_t \le qty^{open}(t)$.
+\end{proof}
+
+\begin{proposition}[Non-Negative Carry]
+For all securities $s$ in any reachable state:
+\[
+U_s \ge 0.
+\]
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+$U_s$ increases only by $\delta\ge 0$ and decreases only by at most its current value.
+\end{proof}
+
+\begin{proposition}[Allocation Conservation]
+For each $s$, allocations are bounded by cumulative settlement supply implied by CNS decreases (i.e., carry increments).
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+All allocations draw only from $U_s$, and $U_s$ increases only via obligation decreases.
+\end{proof}
+
+% ===================== EXACTLY ONCE =====================
+\section{Exactly-Once Publication and Crash Recovery}
+\label{sec:exactly-once}
+
+\begin{proposition}[At-Most-Once Publication in the Model]
+For any $id\in ID_s$, $\mathsf{PUBLISH}_s(id)$ occurs at most once.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Publishing moves $P_s(id)$ from pending to published and never reverses.
+\end{proof}
+
+\begin{proposition}[Crash-Safe Publication State]
+If $P_s(id)=\mathsf{published}$ before a crash, then after restart and replay, $P_s(id)=\mathsf{published}$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+$\mathsf{Published}(id)$ is persisted in $L_s$ and replay sets $P_s(id)$ accordingly.
+\end{proof}
+
+\begin{proposition}[No Lost Allocations Across Crash]
+\hfill\break
+If $(id,t,q)\in A_s$ before a crash, then $(id,t,q)\in A_s$ after restart.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+$\mathsf{AllocationCreated}(id,t,s,q)$ is persisted and replay reconstructs $A_s$.
+\end{proof}
+
+\begin{proposition}[Exactly-Once Downstream Effect]
+Assuming the lending system is idempotent on allocation identifier $id$, each allocation has exactly-once downstream effect under retries despite crashes.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+At-most-once follows from publication monotonicity and idempotence; at-least-once follows because pending allocations persist and are retried after recovery.
+\end{proof}
+
+% ===================== FAIRNESS =====================
+\section{Fairness for Partial Settlements}
+\label{sec:fairness}
+
+\subsection{Eligibility}
+
+Define an eligibility predicate (parameterized by $\Theta_s$):
+\[
+eligible_s(t) \triangleq (t\in Tr_s)\ \wedge\ (qty^{open}(t)>0)\ \wedge\ \mathsf{ExtraElig}_s(t,\Theta_s).
+\]
+
+\subsection{Weak Fairness}
+
+Assume weak fairness per security: if $eligible_s(t)\wedge U_s>0$ holds continuously over an infinite suffix, then there exist infinitely many allocation steps where $X_t>0$.
+
+\begin{proposition}[No Starvation Under Persistent Supply]
+No eligible trade with persistent supply is starved indefinitely.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Immediate from weak fairness.
+\end{proof}
+
+% ===================== RECONCILIATION =====================
+\section{End-of-Day Reconciliation Convergence}
+\label{sec:reconciliation}
+
+\paragraph{Per-Security Reconciliation Equation.}
+At end-of-day for each $s$:
+\[
+\max(0,O_s) = Need_s + U_s + \epsilon_s,
+\]
+where $\epsilon_s$ is an explicitly recorded discrepancy.
+
+\begin{proposition}[Crash-Resilient Convergence Under Stabilization]
+Assume: (i) CNS obligations stabilize by EOD, (ii) there exists a time after which no new trades arrive,
+(iii) enabled allocation and publish actions are retried indefinitely, (iv) the allocation strategy is weakly fair,
+and (v) only finitely many crashes occur. Then for each security $s$ the system reaches a state with
+\[
+\epsilon_s=0
+\quad\text{and}\quad
+\max(0,O_s)=Need_s+U_s.
+\]
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+After stabilization, $O_s$ is constant so $U_s$ stops increasing. With no new trades, progress comes only from allocation.
+While $U_s>0$ and $Need_s>0$, weak fairness yields allocations that reduce $Need_s$ until either $Need_s=0$ or $U_s=0$,
+implying $\epsilon_s=0$. Crashes do not erase progress because replay restores persistent state.
+\end{proof}
+
+% ===================== IMPLEMENTATION =====================
+\section{Implementation Notes (Non-Normative)}
+
+Each security $s$ can be implemented as a shard with:
+\begin{itemize}[leftmargin=*]
+  \item durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
+  \item WAL $L_s$ (or equivalent transactional log),
+  \item an event processor consuming per-security events,
+  \item a strategy plugin implementing $\mathsf{Strategy}_s$,
+  \item a publisher that retries pending allocations until published.
+\end{itemize}
+
+
+\end{document}
