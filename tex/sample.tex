@@ -375,15 +375,23 @@ This is the core transition where settlement supply is allocated to client trade
 \sigma_s \xrightarrow{\mathsf{ALLOCATE}_s}_s \sigma_s'
 \]
 
-\textbf{Strategy Invocation:} The system invokes the pluggable allocation strategy:
+\textbf{Allocation Strategy Operator Invocation:} Define the open-demand vector over current shard trades:
 \[
-\mathsf{Strategy}_s : (Tr_s,\ U_s,\ \Theta_s) \rightarrow \{X_t\}_{t\in Tr_s}
+open_s(t)\triangleq qty^{open}(t)\ (t\in Tr_s),
+\qquad
+Open_s \in \mathbb{Z}_{\ge 0}^{Tr_s}.
 \]
-where each $X_t \in \mathbb{Z}_{\ge 0}$ represents the quantity to allocate to trade $t$.
+The system invokes the allocation operator (Section~\ref{sec:alloc-operator}):
+\[
+X \triangleq \mathcal{F}_{s,\Theta_s}(Tr_s,\ Open_s,\ U_s),
+\qquad
+X \in \mathbb{Z}_{\ge 0}^{Tr_s},
+\]
+where each component $X_t$ is the quantity allocated to trade $t$.
 
 \textbf{Feasibility Constraints:} The strategy must respect:
 \[
-\forall t\in Tr_s:\ 0 \le X_t \le qty^{open}(t),
+\forall t\in Tr_s:\ 0 \le X_t \le open_s(t),
 \qquad
 \sum_{t\in Tr_s} X_t \le U_s.
 \]
@@ -647,7 +655,7 @@ Each security $s$ can be implemented as a shard with:
   \item a durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
   \item a \kfeat{durable ordered message log} providing per-security input streams and a \kfeat{durable cursor} $K_s$,
   \item a \kfeat{transactional processing engine} that commits \emph{atomically}: (i) state updates, (ii) downstream publication (or an outbox/outbound stream append), and (iii) cursor advancement,
-  \item a \kfeat{strategy plugin} implementing $\mathsf{Strategy}_s$,
+  \item a \kfeat{strategy plugin} implementing the operator $\mathcal{F}_{s,\Theta_s}$,
   \item a publisher that retries \kfeat{pending allocations} until \kfeat{published}.
 \end{itemize}
 
