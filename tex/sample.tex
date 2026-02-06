@@ -14,6 +14,11 @@
 \newcommand{\fitcol}[1]{\resizebox{\columnwidth}{!}{$\displaystyle #1$}}
 \newcommand{\fitcoltext}[1]{\resizebox{\columnwidth}{!}{$#1$}}
 
+% ===================== Key-feature emphasis =====================
+% If your TeX setup is missing the *serif bold* font used by acmart, \textbf can look unchanged.
+% This macro forces a bold SANS face (which is almost always available) so features visibly pop.
+\newcommand{\kfeat}[1]{{\sffamily\bfseries #1}}
+
 % ===================== Theorems =====================
 
 % ---- Theorem headings that pop (no boxes, no color) ----
@@ -34,7 +39,6 @@
 \theoremstyle{pbplain}
 \newtheorem{proposition}{Proposition}[section]
 \newtheorem{corollary}{Corollary}[section]
-
 
 % ===================== ACM Metadata / Suppression =====================
 \settopmatter{printacmref=false}
@@ -64,10 +68,16 @@ with Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
 
 \begin{document}
 
-
 % ===================== ABSTRACT =====================
 \begin{abstract}
-This document formally specifies a Prime Brokerage (PB) settlement allocation system as a labeled transition system (LTS). The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities across client trades. Key features include: security-identifier partitioning for parallel processing, exactly-once publication guarantees to downstream lending systems, crash recovery via write-ahead logging, and support for partial settlements. The formal model enables rigorous reasoning about correctness, fault tolerance, and progress properties.
+This document formally specifies a Prime Brokerage (PB) settlement allocation system as a labeled transition system (LTS).
+The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities across client trades.
+Key features include: \kfeat{Security-ID partitioning} for parallel processing,
+\kfeat{pluggable allocation strategies},
+\kfeat{exactly-once publication} guarantees to downstream lending systems,
+\kfeat{crash recovery via write-ahead logging (WAL)},
+and \kfeat{partial-settlement support}.
+The formal model enables rigorous reasoning about correctness, fault tolerance, and progress properties.
 \end{abstract}
 
 \maketitle
@@ -80,17 +90,18 @@ systems presents complex challenges. The prime broker acts as a single participa
 receiving netted obligations for each security. Simultaneously, the PB services numerous
 clients whose individual trades must be settled using the securities received through CNS.
 This document specifies a system that bridges these two worlds: it allocates CNS-settled
-quantities across client trades according to configurable strategies, handles partial
-settlements, ensures exactly-once publication of allocations to downstream lending systems,
-and maintains consistency even in the face of failures.
+quantities across client trades according to \kfeat{configurable (pluggable) strategies},
+handles \kfeat{partial settlements}, ensures \kfeat{exactly-once publication} of allocations to
+downstream lending systems, and maintains consistency via \kfeat{crash recovery} even in the face
+of failures.
 
 \subsection{Core Challenges and Solutions}
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{Partitioning for Scalability}: Processing is partitioned by security identifier, allowing independent and parallel processing per security while preserving correctness.
-  \item \textbf{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after crashes.
-  \item \textbf{Partial Settlement Support}: The system must handle cases where only partial quantities of securities are available for allocation across client trades.
-  \item \textbf{Crash Recovery}: The system must recover deterministically from failures without losing allocated state.
+  \item \textbf{Partitioning for Scalability}: Processing is partitioned by \kfeat{security identifier}, allowing independent and parallel processing per security while preserving correctness.
+  \item \textbf{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after \kfeat{crashes}.
+  \item \textbf{Partial Settlement Support}: The system must handle cases where only \kfeat{partial quantities} of securities are available for allocation across client trades.
+  \item \textbf{Crash Recovery}: The system must recover deterministically from failures without losing allocated state using \kfeat{write-ahead logging (WAL)}.
   \item \textbf{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
 \end{enumerate}
 
@@ -578,11 +589,10 @@ implying $\epsilon_s=0$. Crashes do not erase progress because replay restores p
 Each security $s$ can be implemented as a shard with:
 \begin{itemize}[leftmargin=*]
   \item durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
-  \item WAL $L_s$ (or equivalent transactional log),
+  \item \kfeat{WAL} $L_s$ (or equivalent transactional log),
   \item an event processor consuming per-security events,
-  \item a strategy plugin implementing $\mathsf{Strategy}_s$,
-  \item a publisher that retries pending allocations until published.
+  \item a \kfeat{strategy plugin} implementing $\mathsf{Strategy}_s$,
+  \item a publisher that retries \kfeat{pending allocations} until \kfeat{published}.
 \end{itemize}
-
 
 \end{document}
