@@ -82,6 +82,7 @@ The formal model enables rigorous reasoning about correctness, fault tolerance, 
 \end{abstract}
 
 \maketitle
+\pagestyle{plain}
 
 % ===================== INTRODUCTION =====================
 \section{Introduction and Overview}
@@ -202,7 +203,9 @@ key : \mathcal{E} \rightarrow S.
 \begin{itemize}[leftmargin=*]
   \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
-  \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
+  \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events 
+\hfill\break
+$\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
 \end{itemize}
 
 \khead{Demultiplexing:}
@@ -280,10 +283,12 @@ where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 \subsection{Transactional Processing Discipline (Normative)}
 
 \khead{Atomicity assumption (exactly-once engine):}
-For any input-driven action (e.g., $\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
+For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
-  \item persists the resulting shard state updates (e.g., $A_s,U_s,P_s,O_s,Tr_s$),
-  \item emits the corresponding output message to the downstream lending interface when applicable (notably for $\mathsf{PUBLISH}_s(id)$),
+  \item persists the resulting shard state updates 
+\hfill\break(e.g., $A_s,U_s,P_s,O_s,Tr_s$),
+  \item emits the corresponding output message(s) to the downstream lending interface when applicable
+        (notably for $\mathsf{CLIENT\_TRADE}_s(t)$ and $\mathsf{PUBLISH}_s(id)$),
   \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
 \end{enumerate}
 If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records. This is the sole crash-recovery mechanism required by the design (no separate per-shard WAL is assumed).
@@ -347,12 +352,21 @@ New client trades arrive continuously throughout the day:
 
 \textbf{Precondition:} The trade $t$ must be for security $s$, i.e., $sec(t)=s$.
 
-\textbf{Processing:} Add the trade to the trade set:
+\textbf{Processing:} Within a single atomic transaction, the system:
+\begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
+  \item adds the trade to the shard trade set,
+  \item emits a corresponding \emph{trade-arrival} message to the downstream lending interface (keyed by $t$),
+  \item and advances the durable input cursor $K_s$ for the consumed $\mathsf{CLIENT\_TRADE}_s(t)$ input record.
+\end{enumerate}
+Formally, the shard state update is:
 \[
 Tr_s' = Tr_s \cup \{t\}.
 \]
 
+\textbf{Downstream Interface Assumption (recommended):} The lending system \emph{should} process trade-arrival messages idempotently by trade identifier $t$ so that any retries outside the transactional boundary are harmless.
+
 \textbf{Note:} The trade's total quantity $qty^{tot}(t)$ is immutable and recorded when the trade is added. Initially, $qty^{alloc}(t)=0$ and $qty^{open}(t)=qty^{tot}(t)$.
+
 
 \subsubsection{Allocation (Pluggable, Partial)}
 
@@ -468,16 +482,17 @@ We model the pluggable allocation strategy as an operator that produces an alloc
 (Equivalently, $\mathcal{F}_{s,\Theta}$ may be treated as a relation to allow multiple admissible plans.)
 
 \paragraph{Core operator properties.}
-For any output plan $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$:
+For any output plan
+\hfill\break
+ $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$:
 \begin{enumerate}[leftmargin=*]
   \item \khead{Feasibility:}
   $\forall t\in Tr_s:\ 0\le X_t \le open_s(t)$ and $\sum_{t\in Tr_s} X_t \le U_s$.
-  \item \khead{Eligibility compliance (if applicable):}
+  \item \khead{Eligibility compliance:}
   if $\neg eligible_s(t)$ then $X_t=0$.
-  \item \khead{Work-conserving (recommended):}
+  \item \khead{Work-conserving:}
+\hfill\break
   if $U_s>0$ and $\exists t: eligible_s(t)\wedge open_s(t)>0$ then $\sum_t X_t>0$.
-  \item \khead{Commit-stability (recommended):}
-  the plan depends only on committed shard state and $\Theta_s$; any nondeterminism is seeded from persisted data.
 \end{enumerate}
 
 
