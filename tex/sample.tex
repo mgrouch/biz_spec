@@ -142,7 +142,9 @@ Each trade $t \in T$ represents a client transaction requiring settlement. Trade
 \begin{aligned}
 client(t) &\in C, &&\text{the client who executed the trade}\\
 sec(t) &\in S, &&\text{the security being traded}\\
-qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled (signed: $>0$ receive, $<0$ deliver)}
+qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled (signed: 
+\hfill\break 
+$>0$ receive, $<0$ deliver)}
 \end{aligned}
 \]
 
@@ -154,11 +156,13 @@ CNS obligations (below) use the same signed convention.
 
 The system tracks allocated quantity per trade:
 \[
-qty^{alloc}(t) \in \mathbb{Z},
+\begin{aligned}
+qty^{alloc}(t) &\in \mathbb{Z},
 \qquad
 qty^{alloc}(t)\cdot qty^{tot}(t)\ge 0,
-\qquad
-|qty^{alloc}(t)| \le |qty^{tot}(t)|.
+\qquad \\
+|qty^{alloc}(t)| &\le |qty^{tot}(t)|.
+\end{aligned}
 \]
 Open (unallocated) quantity is:
 \[
@@ -223,6 +227,7 @@ key : \mathcal{E} \rightarrow S.
   \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
   \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events
+\hfill\break
   $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
 \end{itemize}
 
@@ -307,7 +312,7 @@ where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 \khead{Atomicity assumption (exactly-once engine):}
 For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
-  \item persists the resulting shard state updates (e.g., $A_s,U_s,P_s,O_s,Tr_s$),
+  \item persists the resulting shard state updates ($A_s,U_s,P_s,O_s,Tr_s$),
   \item emits the corresponding output message(s) to the downstream lending interface when applicable
         (notably for $\mathsf{CLIENT\_TRADE}_s(t)$ and $\mathsf{PUBLISH}_s(id)$),
   \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
@@ -319,7 +324,9 @@ If a crash occurs before commit, \emph{none} of these effects become visible; on
 \[
 Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
 \]
-This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed: receive positive, deliver negative). It guides allocation decisions and appears in the end-of-day reconciliation equation.
+This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed: 
+\hfill\break
+receive positive, deliver negative). It guides allocation decisions and appears in the end-of-day reconciliation equation.
 
 % ===================== TRANSITIONS =====================
 \subsection{Per-Shard Transition Relation: Detailed Explanations}
@@ -519,14 +526,18 @@ We model the pluggable allocation strategy as an operator that produces an alloc
 (Equivalently, $\mathcal{F}_{s,\Theta}$ may be treated as a relation to allow multiple admissible plans.)
 
 \paragraph{Core operator properties.}
-For any output plan $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
+For any output plan
+\hfill\break
+$X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
 \begin{enumerate}[leftmargin=*]
   \item \khead{Feasibility:}
   if $d=0$ then $X_t=0$ for all $t$; otherwise for all $t\in Tr_s$,
   \[
-  \sgn(open_s(t))\neq d \Rightarrow X_t=0,
-  \qquad
-  \sgn(open_s(t))=d \Rightarrow 0 \le d\cdot X_t \le d\cdot open_s(t),
+  \begin{aligned}
+  \sgn(open_s(t))\neq d &\Rightarrow X_t=0,
+  \qquad \\
+  \sgn(open_s(t))=d &\Rightarrow 0 \le d\cdot X_t \le d\cdot open_s(t),
+  \end{aligned}
   \]
   and
   \[
@@ -535,6 +546,7 @@ For any output plan $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangle
   \item \khead{Eligibility compliance:}
   if $\neg eligible_s(t)$ then $X_t=0$.
   \item \khead{Work-conserving:}
+\hfill\break
   if $U_s\neq 0$ and $\exists t: eligible_s(t)\wedge \sgn(open_s(t))=\sgn(U_s)$ then $\sum_t X_t\neq 0$.
 \end{enumerate}
 
