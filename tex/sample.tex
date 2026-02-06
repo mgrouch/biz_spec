@@ -41,6 +41,7 @@
 
 % ===================== Operators =====================
 \DeclareMathOperator{\sgn}{sgn}
+\DeclareMathOperator{\dom}{dom} 
 
 % ===================== ACM Metadata / Suppression =====================
 \settopmatter{printacmref=false}
@@ -233,12 +234,12 @@ key : \mathcal{E} \rightarrow S.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
   \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events
 \hfill\break
-  $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
+  $\mathsf{MSG}_s(M(s))$ for each $s\in \mathrm{dom}(M)$.
 \end{itemize}
 
 \khead{Demultiplexing:}
 \[
-\mathsf{MSG}(M) \equiv \{\, \mathsf{MSG}_s(M(s)) \mid s \in dom(M)\,\}.
+\mathsf{MSG}(M) \equiv \{\, \mathsf{MSG}_s(M(s)) \mid s \in \dom(M)\,\}.
 \]
 
 \subsection{Global Transition Relation}
@@ -330,7 +331,6 @@ If a crash occurs before commit, \emph{none} of these effects become visible; on
 Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
 \]
 This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed: 
-\hfill\break
 receive positive, deliver negative). It guides allocation decisions and appears in the end-of-day reconciliation equation.
 
 % ===================== TRANSITIONS =====================
