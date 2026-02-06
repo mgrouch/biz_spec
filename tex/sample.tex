@@ -21,8 +21,6 @@
 \DeclareRobustCommand{\khead}[1]{{\fontfamily{cmss}\fontseries{bx}\selectfont #1}}
 
 % ===================== Theorems =====================
-
-% ---- Theorem headings that pop (robust visible-bold, no boxes, no color) ----
 \usepackage{amsthm}
 
 \newtheoremstyle{pbplain}
@@ -40,6 +38,9 @@
 \theoremstyle{pbplain}
 \newtheorem{proposition}{Proposition}[section]
 \newtheorem{corollary}{Corollary}[section]
+
+% ===================== Operators =====================
+\DeclareMathOperator{\sgn}{sgn}
 
 % ===================== ACM Metadata / Suppression =====================
 \settopmatter{printacmref=false}
@@ -72,7 +73,8 @@ with Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
 % ===================== ABSTRACT =====================
 \begin{abstract}
 This document formally specifies a Prime Brokerage (PB) settlement allocation system as a labeled transition system (LTS).
-The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities across client trades.
+The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities flows across client trades,
+covering both receive- and deliver-side settlement using a signed-quantity convention.
 Key features include: \kfeat{Security-ID partitioning} for parallel processing,
 \kfeat{pluggable allocation strategies},
 \kfeat{exactly-once publication} guarantees to downstream lending systems,
@@ -90,7 +92,7 @@ The formal model enables rigorous reasoning about correctness, fault tolerance, 
 In prime brokerage operations, securities settlement through Continuous Net Settlement (CNS)
 systems presents complex challenges. The prime broker acts as a single participant in CNS,
 receiving netted obligations for each security. Simultaneously, the PB services numerous
-clients whose individual trades must be settled using the securities received through CNS.
+clients whose individual trades must be settled using the securities received from or delivered into CNS.
 This document specifies a system that bridges these two worlds: it allocates CNS-settled
 quantities across client trades according to \kfeat{configurable (pluggable) strategies},
 handles \kfeat{partial settlements}, ensures \kfeat{exactly-once publication} of allocations to
@@ -140,21 +142,29 @@ Each trade $t \in T$ represents a client transaction requiring settlement. Trade
 \begin{aligned}
 client(t) &\in C, &&\text{the client who executed the trade}\\
 sec(t) &\in S, &&\text{the security being traded}\\
-qty^{tot}(t) &\in \mathbb{Z}_{\ge 0}, &&\text{total quantity to be settled (magnitude)}
+qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled (signed: $>0$ receive, $<0$ deliver)}
 \end{aligned}
 \]
 
 \paragraph{Quantity sign and direction.}
-Trade and allocation quantities in this model are \emph{non-negative magnitudes}. Trade direction (e.g., buy vs.\ sell, receive vs.\ deliver) is treated as a separate attribute and is not needed for the allocation mechanics specified here. In contrast, CNS obligations (below) use a \emph{signed} convention: positive means PB is due to receive, negative means PB must deliver.
+Trade and allocation quantities in this model use a \emph{signed} convention:
+$qty^{tot}(t)>0$ denotes a receive trade (PB is due to receive securities),
+and $qty^{tot}(t)<0$ denotes a deliver trade (PB is due to deliver securities).
+CNS obligations (below) use the same signed convention.
 
 The system tracks allocated quantity per trade:
 \[
-qty^{alloc}(t) \in \mathbb{Z}_{\ge 0}, \quad 0 \le qty^{alloc}(t) \le qty^{tot}(t),
+qty^{alloc}(t) \in \mathbb{Z},
+\qquad
+qty^{alloc}(t)\cdot qty^{tot}(t)\ge 0,
+\qquad
+|qty^{alloc}(t)| \le |qty^{tot}(t)|.
 \]
-and computes open (unallocated) quantity:
+Open (unallocated) quantity is:
 \[
 qty^{open}(t) \triangleq qty^{tot}(t) - qty^{alloc}(t).
 \]
+Thus $qty^{open}(t)$ has the same sign as $qty^{tot}(t)$ (or is $0$), and decreases toward $0$ as settlement is allocated.
 
 \subsection{CNS Obligations and Settlement Supply}
 
@@ -167,10 +177,19 @@ For each security $s \in S$, CNS provides the PB's net open obligation $O(s)\in\
 A positive $O(s)$ indicates CNS owes securities to PB (receive), while negative indicates PB owes CNS (deliver).
 The same sign convention applies to each $M(s)$ when present.
 
-The system only allocates settlement supply derived from decreases in receive obligations:
+\paragraph{Settlement flow induced by obligation changes.}
+The allocatable settled flow for security $s$ induced by an obligation update is:
 \[
-\Delta settle(s) \triangleq \max(0, O_{prev}(s) - O_{new}(s)).
+\Delta settle(s) \triangleq
+\begin{cases}
+O_{prev}(s) - O_{new}(s),
+& \text{if } \sgn(O_{prev}(s))=\sgn(O_{new}(s))\ \wedge\ |O_{new}(s)|<|O_{prev}(s)|,\\
+O_{prev}(s),
+& \text{if } \sgn(O_{prev}(s))\neq \sgn(O_{new}(s)),\\
+0, & \text{otherwise.}
+\end{cases}
 \]
+A positive $\Delta settle(s)$ means PB \emph{received} securities; a negative value means PB \emph{delivered} securities.
 
 % ===================== PARTITIONED LTS =====================
 \section{System as a Partitioned Labeled Transition System}
@@ -203,9 +222,8 @@ key : \mathcal{E} \rightarrow S.
 \begin{itemize}[leftmargin=*]
   \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
-  \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events 
-\hfill\break
-$\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
+  \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events
+  $\mathsf{MSG}_s(M(s))$ for each $s\in dom(M)$.
 \end{itemize}
 
 \khead{Demultiplexing:}
@@ -238,12 +256,16 @@ For a fixed security $s\in S$, shard state:
 \begin{itemize}[leftmargin=*]
   \item $O_s\in\mathbb{Z}$: current CNS open obligation for security $s$.
   \item $Tr_s\subseteq T$: set of trades with $sec(t)=s$.
-  \item $A_s\subseteq ID_s\times T\times\mathbb{Z}_{\ge 0}$: allocation ledger, tuples $(id,t,q)$.
-  \item $U_s\in\mathbb{Z}_{\ge 0}$: unallocated settlement carry.
+  \item $A_s\subseteq ID_s\times T\times\mathbb{Z}$: allocation ledger, tuples $(id,t,q)$ (signed $q$).
+  \item $U_s\in\mathbb{Z}$: unallocated settled-flow carry (signed).
   \item $P_s:ID_s\rightharpoonup\{\mathsf{pending},\mathsf{published}\}$: publication status map.
   \item $K_s\in\mathbb{Z}_{\ge 0}$: durable input cursor (last committed position) for the per-security ordered message stream.
   \item $\Theta_s$: configuration and strategy parameters.
 \end{itemize}
+
+\begin{proposition}[Cursor Monotonicity]
+For all reachable states, $K_s$ is non-decreasing and increases with each commit of input-driven transitions.
+\end{proposition}
 
 \paragraph{Local Identifier Spaces.}
 \[
@@ -285,8 +307,7 @@ where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
 \khead{Atomicity assumption (exactly-once engine):}
 For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
-  \item persists the resulting shard state updates 
-\hfill\break(e.g., $A_s,U_s,P_s,O_s,Tr_s$),
+  \item persists the resulting shard state updates (e.g., $A_s,U_s,P_s,O_s,Tr_s$),
   \item emits the corresponding output message(s) to the downstream lending interface when applicable
         (notably for $\mathsf{CLIENT\_TRADE}_s(t)$ and $\mathsf{PUBLISH}_s(id)$),
   \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
@@ -298,7 +319,7 @@ If a crash occurs before commit, \emph{none} of these effects become visible; on
 \[
 Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
 \]
-This $Need_s$ represents the total settlement demand from all client trades for security $s$. It guides allocation decisions and appears in the end-of-day reconciliation equation.
+This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed: receive positive, deliver negative). It guides allocation decisions and appears in the end-of-day reconciliation equation.
 
 % ===================== TRANSITIONS =====================
 \subsection{Per-Shard Transition Relation: Detailed Explanations}
@@ -317,7 +338,7 @@ The system reconciles with CNS at start of day to establish the initial obligati
 O_s' = x.
 \]
 
-\textbf{Purpose:} This establishes the baseline for tracking settlement supply. If $x>0$, it represents an initial receive obligation from CNS; if $x\leq 0$, no initial settlement supply exists.
+\textbf{Purpose:} This establishes the baseline for tracking settlement flow on either side (receive if $x>0$, deliver if $x<0$).
 
 \subsubsection{CNS Updates (MT570, Settle Batch)}
 
@@ -328,9 +349,9 @@ CNS provides updates through MT570 messages or settle batch notifications. These
 \sigma_s \xrightarrow{\mathsf{SETTLE\_BATCH}_s(x)}_s \sigma_s'.
 \]
 
-\textbf{Processing:} First compute the settlement supply $\delta$, which captures any decrease in receive obligations:
+\textbf{Processing:} Compute allocatable settled flow induced by the obligation change:
 \[
-\delta \triangleq \max(0,\ O_s - x).
+\delta \triangleq \Delta settle(s)\ \text{with } O_{prev}(s)=O_s,\ O_{new}(s)=x.
 \]
 Then update carry and obligation:
 \[
@@ -339,7 +360,8 @@ U_s' = U_s + \delta,
 O_s' = x.
 \]
 
-\textbf{Business Logic:} Only decreases in positive obligations yield settlement supply. Increases in obligations (or movements from deliver to receive) do not create supply. This matches the physical reality: the PB can only allocate securities it has actually received from CNS.
+\textbf{Business Logic:} Allocatable settled flow is created only when $|O_s|$ decreases (or the sign flips, settling the prior side).
+Pure increases in $|O_s|$ represent new/expanded obligations and do not create allocatable settled flow.
 
 \subsubsection{Client Trade Arrival}
 
@@ -367,10 +389,9 @@ Tr_s' = Tr_s \cup \{t\}.
 
 \textbf{Note:} The trade's total quantity $qty^{tot}(t)$ is immutable and recorded when the trade is added. Initially, $qty^{alloc}(t)=0$ and $qty^{open}(t)=qty^{tot}(t)$.
 
-
 \subsubsection{Allocation (Pluggable, Partial)}
 
-This is the core transition where settlement supply is allocated to client trades:
+This is the core transition where settled flow is allocated to client trades:
 \[
 \sigma_s \xrightarrow{\mathsf{ALLOCATE}_s}_s \sigma_s'
 \]
@@ -379,25 +400,33 @@ This is the core transition where settlement supply is allocated to client trade
 \[
 open_s(t)\triangleq qty^{open}(t)\ (t\in Tr_s),
 \qquad
-Open_s \in \mathbb{Z}_{\ge 0}^{Tr_s}.
+Open_s \in \mathbb{Z}^{Tr_s}.
 \]
 The system invokes the allocation operator (Section~\ref{sec:alloc-operator}):
 \[
 X \triangleq \mathcal{F}_{s,\Theta_s}(Tr_s,\ Open_s,\ U_s),
 \qquad
-X \in \mathbb{Z}_{\ge 0}^{Tr_s},
+X \in \mathbb{Z}^{Tr_s},
 \]
-where each component $X_t$ is the quantity allocated to trade $t$.
+where each component $X_t$ is the signed quantity allocated to trade $t$.
 
-\textbf{Feasibility Constraints:} The strategy must respect:
+\textbf{Feasibility Constraints:} Let $d \triangleq \sgn(U_s)$.
+If $d=0$, then $X_t=0$ for all $t$.
+Otherwise the plan must satisfy:
 \[
-\forall t\in Tr_s:\ 0 \le X_t \le open_s(t),
-\qquad
-\sum_{t\in Tr_s} X_t \le U_s.
+\forall t\in Tr_s:\ 
+\begin{cases}
+X_t = 0, & \text{if } \sgn(open_s(t))\neq d,\\
+0 \le d\cdot X_t \le d\cdot open_s(t), & \text{if } \sgn(open_s(t))=d,
+\end{cases}
 \]
-The first constraint prevents over-allocation to individual trades; the second ensures the allocation doesn't exceed available supply.
+and the total must respect available carry:
+\[
+0 \le d\cdot \sum_{t\in Tr_s} X_t \le d\cdot U_s \ (=|U_s|).
+\]
+Intuitively, receive-side carry ($U_s>0$) is allocated only to receive-open trades, and deliver-side carry ($U_s<0$) only to deliver-open trades.
 
-\textbf{Processing for Positive Allocations:} For each trade $t$ with $X_t>0$, the system:
+\textbf{Processing for Nonzero Allocations:} For each trade $t$ with $X_t\neq 0$, the system:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
   \item Generates a fresh allocation identifier $id_t\in ID_s$
   \item Adds $(id_t,t,X_t)$ to the allocation ledger $A_s$
@@ -405,12 +434,12 @@ The first constraint prevents over-allocation to individual trades; the second e
   \item Sets publication status $P_s(id_t)=\mathsf{pending}$
 \end{enumerate}
 
-\textbf{Supply Reduction:} The total allocated quantity is deducted from unallocated carry:
+\textbf{Carry Update:} The total allocated quantity is deducted from unallocated carry:
 \[
 U_s' = U_s - \sum_{t\in Tr_s} X_t.
 \]
 
-\textbf{Partial Allocation Behavior:} The strategy may allocate zero to some or all trades. If $X_t=0$ for all $t$, then $U_s$ remains unchanged, representing explicit carry forward. This allows the system to handle partial settlements: when insufficient supply exists to satisfy all demand, the strategy determines which trades get allocation and in what amounts.
+\textbf{Partial Allocation Behavior:} The operator may allocate zero to some or all trades. If $X_t=0$ for all $t$, then $U_s$ remains unchanged, representing explicit carry forward. This supports partial settlements on either side.
 
 \subsubsection{Exactly-Once Publication to Lending}
 
@@ -443,18 +472,18 @@ At end of day, the system reconciles its internal state with CNS obligations:
 \sigma_s \xrightarrow{\mathsf{EOD\_RECON}_s}_s \sigma_s'
 \]
 
-\textbf{Discrepancy Calculation:} Compute the difference between what CNS says should be available and what the system tracks:
+\textbf{Discrepancy Calculation:} Compute the signed difference between CNS and the system's tracked decomposition:
 \[
-\epsilon_s \triangleq \max(0,O_s) - (Need_s + U_s).
+\epsilon_s \triangleq O_s - (Need_s + U_s).
 \]
-Here $\max(0,O_s)$ represents securities CNS indicates are available (only positive obligations count). The term $(Need_s + U_s)$ represents what the system tracks: open trade demand plus unallocated carry.
+Here $O_s$ is CNS net open obligation, while $(Need_s + U_s)$ is the system's net open trade demand plus unallocated carry.
 
 \textbf{Processing:} The discrepancy $\epsilon_s$ is recorded externally (e.g., in a break table for investigation). The shard state itself remains unchanged:
 \[
 \sigma_s' = \sigma_s.
 \]
 
-\textbf{Interpretation:} A positive $\epsilon_s$ suggests the system has allocated less than what CNS indicates is available (potential under-allocation). A negative $\epsilon_s$ suggests the system has allocated more than available (impossible under our invariants). Under normal operation, $\epsilon_s$ should be zero.
+\textbf{Interpretation:} Under normal operation, $\epsilon_s$ should be $0$. A nonzero $\epsilon_s$ indicates a reconciliation break; its sign indicates the direction of the net mismatch.
 
 \subsubsection{Crash and Restart}
 
@@ -480,29 +509,34 @@ For a fixed security $s$, define the open-demand vector over shard trades:
 \[
 open_s(t)\triangleq qty^{open}(t)\ \ (t\in Tr_s),
 \qquad
-Open_s \in \mathbb{Z}_{\ge 0}^{Tr_s}.
+Open_s \in \mathbb{Z}^{Tr_s}.
 \]
 
 We model the pluggable allocation strategy as an operator that produces an allocation plan:
 \[
-\mathcal{F}_{s,\Theta}:\ (Tr_s,\ Open_s,\ U_s)\ \to\ X \in \mathbb{Z}_{\ge 0}^{Tr_s}.
+\mathcal{F}_{s,\Theta}:\ (Tr_s,\ Open_s,\ U_s)\ \to\ X \in \mathbb{Z}^{Tr_s}.
 \]
 (Equivalently, $\mathcal{F}_{s,\Theta}$ may be treated as a relation to allow multiple admissible plans.)
 
 \paragraph{Core operator properties.}
-For any output plan
-\hfill\break
- $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$:
+For any output plan $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
 \begin{enumerate}[leftmargin=*]
   \item \khead{Feasibility:}
-  $\forall t\in Tr_s:\ 0\le X_t \le open_s(t)$ and $\sum_{t\in Tr_s} X_t \le U_s$.
+  if $d=0$ then $X_t=0$ for all $t$; otherwise for all $t\in Tr_s$,
+  \[
+  \sgn(open_s(t))\neq d \Rightarrow X_t=0,
+  \qquad
+  \sgn(open_s(t))=d \Rightarrow 0 \le d\cdot X_t \le d\cdot open_s(t),
+  \]
+  and
+  \[
+  0 \le d\cdot \sum_{t\in Tr_s} X_t \le d\cdot U_s \ (=|U_s|).
+  \]
   \item \khead{Eligibility compliance:}
   if $\neg eligible_s(t)$ then $X_t=0$.
   \item \khead{Work-conserving:}
-\hfill\break
-  if $U_s>0$ and $\exists t: eligible_s(t)\wedge open_s(t)>0$ then $\sum_t X_t>0$.
+  if $U_s\neq 0$ and $\exists t: eligible_s(t)\wedge \sgn(open_s(t))=\sgn(U_s)$ then $\sum_t X_t\neq 0$.
 \end{enumerate}
-
 
 % ===================== CONCURRENCY =====================
 \section{Concurrency Properties Induced by Partitioning}
@@ -530,31 +564,37 @@ By definition of the global transition relation, each event updates only its key
 \begin{proposition}[No Over-Allocation]
 For all trades $t$ in any reachable state:
 \[
-0 \le qty^{alloc}(t) \le qty^{tot}(t).
+qty^{alloc}(t)\cdot qty^{tot}(t)\ge 0
+\quad\wedge\quad
+|qty^{alloc}(t)| \le |qty^{tot}(t)|.
 \]
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-Only allocation increases $qty^{alloc}(t)$, and feasibility enforces $X_t \le qty^{open}(t)$.
+Only allocation changes $qty^{alloc}(t)$, and feasibility enforces that allocations have the same sign as open demand and do not exceed it in magnitude, hence cannot exceed $|qty^{tot}(t)|$.
 \end{proof}
 
-\begin{proposition}[Non-Negative Carry]
-For all securities $s$ in any reachable state:
+\begin{proposition}[Allocation Never Exceeds Carry]
+In any $\mathsf{ALLOCATE}_s$ transition with pre-state carry $U_s$, the chosen plan $X$ satisfies
 \[
-U_s \ge 0.
+\left|\sum_{t\in Tr_s} X_t\right| \le |U_s|
+\quad\text{and}\quad
+\sgn\!\left(\sum_{t\in Tr_s} X_t\right)\in\{0,\sgn(U_s)\}.
 \]
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-$U_s$ increases only by $\delta\ge 0$ and decreases only by at most its current value.
+Immediate from the feasibility constraint $0 \le d\cdot \sum_t X_t \le d\cdot U_s$ with $d=\sgn(U_s)$.
 \end{proof}
 
 \begin{proposition}[Allocation Conservation]
-For each $s$, allocations are bounded by cumulative settlement supply implied by CNS decreases (i.e., carry increments).
+For each $s$, allocations are bounded by cumulative settled flow implied by CNS updates: carry evolves as
+$U_s := U_s + \Delta settle(s)$ on CNS updates and $U_s := U_s - \sum_t X_t$ on allocations, so total allocated
+flow cannot exceed the cumulative settled flow on either side.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-All allocations draw only from $U_s$, and $U_s$ increases only via obligation decreases.
+By construction, carry is the residual between cumulative settled flow and cumulative allocated flow; feasibility prevents allocating more than the current residual magnitude.
 \end{proof}
 
 % ===================== EXACTLY ONCE =====================
@@ -578,7 +618,6 @@ $P_s$ is persistent. By the transactional discipline, once the published state i
 \end{proof}
 
 \begin{proposition}[No Lost Allocations Across Crash]
-\hfill\break
 If $(id,t,q)\in A_s$ before a crash, then $(id,t,q)\in A_s$ after restart.
 \end{proposition}
 
@@ -604,15 +643,15 @@ Downstream idempotence makes any residual duplicate deliveries harmless.
 
 Define an eligibility predicate (parameterized by $\Theta_s$):
 \[
-eligible_s(t) \triangleq (t\in Tr_s)\ \wedge\ (qty^{open}(t)>0)\ \wedge\ \mathsf{ExtraElig}_s(t,\Theta_s).
+eligible_s(t) \triangleq (t\in Tr_s)\ \wedge\ (qty^{open}(t)\neq 0)\ \wedge\ \mathsf{ExtraElig}_s(t,\Theta_s).
 \]
 
 \subsection{Weak Fairness}
 
-Assume weak fairness per security: if $eligible_s(t)\wedge U_s>0$ holds continuously over an infinite suffix, then there exist infinitely many allocation steps where $X_t>0$.
+Assume weak fairness per security: if $eligible_s(t)\wedge U_s\neq 0 \wedge \sgn(qty^{open}(t))=\sgn(U_s)$ holds continuously over an infinite suffix, then there exist infinitely many allocation steps where $X_t\neq 0$.
 
-\begin{proposition}[No Starvation Under Persistent Supply]
-No eligible trade with persistent supply is starved indefinitely.
+\begin{proposition}[No Starvation Under Persistent Same-Side Supply]
+No eligible trade with persistent same-side carry is starved indefinitely.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
@@ -626,9 +665,9 @@ Immediate from weak fairness.
 \paragraph{Per-Security Reconciliation Equation.}
 At end-of-day for each $s$:
 \[
-\max(0,O_s) = Need_s + U_s + \epsilon_s,
+O_s = Need_s + U_s + \epsilon_s,
 \]
-where $\epsilon_s$ is an explicitly recorded discrepancy.
+where $\epsilon_s$ is an explicitly recorded signed discrepancy.
 
 \begin{proposition}[Crash-Resilient Convergence Under Stabilization]
 Assume: (i) CNS obligations stabilize by EOD, (ii) there exists a time after which no new trades arrive,
@@ -637,13 +676,14 @@ and (v) only finitely many crashes occur. Then for each security $s$ the system 
 \[
 \epsilon_s=0
 \quad\text{and}\quad
-\max(0,O_s)=Need_s+U_s.
+O_s=Need_s+U_s.
 \]
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-After stabilization, $O_s$ is constant so $U_s$ stops increasing. With no new trades, progress comes only from allocation.
-While $U_s>0$ and $Need_s>0$, weak fairness yields allocations that reduce $Need_s$ until either $Need_s=0$ or $U_s=0$,
+After stabilization, $O_s$ is constant so $U_s$ stops changing due to CNS inputs. With no new trades, progress comes only from allocation.
+While $U_s\neq 0$ and there exist same-side open trades ($\exists t:\ qty^{open}(t)\neq 0 \wedge \sgn(qty^{open}(t))=\sgn(U_s)$),
+weak fairness yields allocations that reduce same-side open demand toward $0$ until either same-side demand is exhausted or $U_s$ reaches $0$,
 implying $\epsilon_s=0$. Crashes do not erase committed progress because persistent state and the durable cursor restore the shard to its last committed point.
 \end{proof}
 
