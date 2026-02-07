@@ -55,10 +55,10 @@
 \acmYear{}
 
 % Provide a short title without line breaks for PDF metadata
-\title[PB CNS Settlement Allocation System]{Prime Brokerage CNS Settlement Allocation System: Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
+\title[PB CNS Settlement Allocation System]{PB CNS Settlement Allocation System: Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
 
 % Full (typeset) title can still contain line breaks
-\title{Prime Brokerage CNS Settlement Allocation System\\
+\title{PB CNS Settlement Allocation System\\
 with Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
 
 \author{}
@@ -73,7 +73,7 @@ with Security-ID Partitioning, Exactly-Once Publication, and Crash Recovery}
 
 % ===================== ABSTRACT =====================
 \begin{abstract}
-This document formally specifies a Prime Brokerage (PB) settlement allocation system as a labeled transition system (LTS).
+This document formally specifies a PB (PB) settlement allocation system as a labeled transition system (LTS).
 The system handles Continuous Net Settlement (CNS) obligations by allocating settled securities flows across client trades,
 covering both receive- and deliver-side settlement using a signed-quantity convention.
 Key features include: \kfeat{Security-ID partitioning} for parallel processing,
@@ -90,7 +90,7 @@ The formal model enables rigorous reasoning about correctness, fault tolerance, 
 % ===================== INTRODUCTION =====================
 \section{Introduction and Overview}
 
-In prime brokerage operations, securities settlement through Continuous Net Settlement (CNS)
+In PB operations, securities settlement through Continuous Net Settlement (CNS)
 systems presents complex challenges. The prime broker acts as a single participant in CNS,
 receiving netted obligations for each security. Simultaneously, the PB services numerous
 clients whose individual trades must be settled using the securities received from or delivered into CNS.
