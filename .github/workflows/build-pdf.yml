@@ -13,7 +13,7 @@ jobs:
     # Change these two env vars to match your repo layout
     env:
       DOC_DIR: tex
-      ROOT_TEX: *.tex
+      ROOT_TEX: "*.tex"
 
     steps:
       - name: Checkout
