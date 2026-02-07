@@ -1,0 +1,47 @@
+name: build-pdf
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build_pdf:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    # Change these two env vars to match your repo layout
+    env:
+      DOC_DIR: tex
+      ROOT_TEX: main.tex
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Builds PDF(s) in-place (next to the .tex file)
+      - name: Compile LaTeX
+        uses: xu-cheng/latex-action@v4
+        with:
+          working_directory: ${{ env.DOC_DIR }}
+          root_file: ${{ env.ROOT_TEX }}
+
+          # Optional: match your setup (LuaLaTeX + shell-escape)
+          latexmk_use_lualatex: true
+          latexmk_shell_escape: true
+          args: "-shell-escape -interaction=nonstopmode -file-line-error"
+
+          # Optional: if you use PlantUML/inkscape/graphviz, etc.
+          extra_system_packages: "inkscape ghostscript graphviz openjdk11-jre"
+          pre_compile: |
+            # Allow writing auxiliary files in restricted environments
+            echo "openout_any = a" | tee -a "$(kpsewhich texmf.cnf)"
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: pdf-${{ github.ref_name }}-${{ github.sha }}
+          path: |
+            ${{ env.DOC_DIR }}/**/*.pdf
+          if-no-files-found: error
+          retention-days: 5
