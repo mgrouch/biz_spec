@@ -41,7 +41,7 @@
 
 % ===================== Operators =====================
 \DeclareMathOperator{\sgn}{sgn}
-\DeclareMathOperator{\dom}{dom} 
+\DeclareMathOperator{\dom}{dom}
 
 % ===================== ACM Metadata / Suppression =====================
 \settopmatter{printacmref=false}
@@ -80,7 +80,8 @@ Key features include: \kfeat{Security-ID partitioning} for parallel processing,
 \kfeat{pluggable allocation strategies},
 \kfeat{exactly-once publication} guarantees to downstream lending systems,
 \kfeat{crash recovery via transactional processing over a durable ordered message log},
-and \kfeat{partial-settlement support}.
+\kfeat{partial-settlement support},
+and a special case where a trade may be \kfeat{sent to CNS but ultimately settles broker-to-broker} with settlement confirmed by an external system.
 The formal model enables rigorous reasoning about correctness, fault tolerance, and progress properties.
 \end{abstract}
 
@@ -100,6 +101,12 @@ handles \kfeat{partial settlements}, ensures \kfeat{exactly-once publication} of
 downstream lending systems, and maintains consistency via \kfeat{crash recovery} even in the face
 of failures.
 
+\paragraph{Special case: CNS bypass settlement.}
+In some flows, a trade may be routed to CNS but not settle in CNS; instead, the trade settles \emph{broker-to-broker}
+outside CNS and an external system later notifies the PB of that settlement.
+This model represents such events as an additional source of allocatable settlement supply that
+\emph{does not change} the CNS obligation state $O_s$, but \emph{does change} the settlement carry available for allocation.
+
 \subsection{Core Challenges and Solutions}
 
 \begin{enumerate}[leftmargin=*]
@@ -107,7 +114,7 @@ of failures.
   \item \khead{Exactly-Once Semantics}: Allocations published to lending systems must not be duplicated or lost, even during retries after \kfeat{crashes}.
   \item \khead{Partial Settlement Support}: The system must handle cases where only \kfeat{partial quantities} of securities are available for allocation across client trades.
   \item \khead{Crash Recovery}: The system recovers deterministically using \kfeat{transactional commits} against a \kfeat{durable ordered message log}: state updates, output publication, and advancement of the input cursor occur atomically, so crashes do not lose committed progress.
-  \item \khead{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations to identify any discrepancies.
+  \item \khead{End-of-Day Reconciliation}: The system must reconcile allocated quantities with CNS obligations and (when present) broker-to-broker settlement notifications to identify discrepancies.
 \end{enumerate}
 
 \subsection{Modeling Approach}
@@ -132,6 +139,7 @@ of failures.
   \item $C$ : finite set of client identifiers.
   \item $T$ : finite set of trade identifiers.
   \item $ID$ : finite set of allocation identifiers.
+  \item $EID$ : finite (or countable) set of external-settlement event identifiers (for idempotence).
   \item $\mathbb{Z}$ : integers (positive, negative, and zero).
   \item $\mathbb{Z}_{\ge 0}$ : non-negative integers.
 \end{itemize}
@@ -146,7 +154,7 @@ sec(t) &\in S, &&\text{the security being traded}\\
 qty^{tot}(t) &\in \mathbb{Z}, &&\text{total quantity to be settled}
 \end{aligned}
 \]
-\hfill\break 
+\hfill\break
 (signed: $>0$ receive, $<0$ deliver)
 
 \paragraph{Quantity sign and direction.}
@@ -198,8 +206,12 @@ O_{prev}(s),
 0, & \text{otherwise.}
 \end{cases}
 \]
-
 A positive $\Delta settle(s)$ means PB \emph{received} securities; a negative value means PB \emph{delivered} securities.
+
+\paragraph{External (broker-to-broker) settlement supply.}
+In the CNS-bypass special case, an external system notifies that settlement has occurred broker-to-broker for security $s$.
+We model each such notification as an event with a unique identifier $eid\in EID$ and a signed quantity $x\in\mathbb{Z}$.
+This contributes allocatable settlement supply but \emph{does not} change the CNS obligation $O(s)$.
 
 % ===================== PARTITIONED LTS =====================
 \section{System as a Partitioned Labeled Transition System}
@@ -233,8 +245,8 @@ key : \mathcal{E} \rightarrow S.
   \item For trade events $\mathsf{CLIENT\_TRADE}(t)$, $key(\cdot)=sec(t)$.
   \item For publication events $\mathsf{PUBLISH}(id)$, $key(\cdot)=sec(id)$.
   \item For CNS multi-security messages $M:S\rightharpoonup\mathbb{Z}$, ingestion is modeled by demultiplexing into per-security events
-\hfill\break
-  $\mathsf{MSG}_s(M(s))$ for each $s\in \mathrm{dom}(M)$.
+        $\mathsf{MSG}_s(M(s))$ for each $s\in \mathrm{dom}(M)$.
+  \item For external broker-to-broker settlement events $\mathsf{B2B\_SETTLE}(eid,s,x)$, $key(\cdot)=s$.
 \end{itemize}
 
 \khead{Demultiplexing:}
@@ -261,14 +273,16 @@ Let the global state be $\sigma = \langle \sigma_s \rangle_{s\in S}$. For any ev
 
 For a fixed security $s\in S$, shard state:
 \[
-\sigma_s = (O_s,\ Tr_s,\ A_s,\ U_s,\ P_s,\ K_s,\ \Theta_s).
+\sigma_s = (O_s,\ Tr_s,\ A_s,\ U_s,\ B_s,\ D_s,\ P_s,\ K_s,\ \Theta_s).
 \]
 
 \begin{itemize}[leftmargin=*]
   \item $O_s\in\mathbb{Z}$: current CNS open obligation for security $s$.
   \item $Tr_s\subseteq T$: set of trades with $sec(t)=s$.
   \item $A_s\subseteq ID_s\times T\times\mathbb{Z}$: allocation ledger, tuples $(id,t,q)$ (signed $q$).
-  \item $U_s\in\mathbb{Z}$: unallocated settled-flow carry (signed).
+  \item $U_s\in\mathbb{Z}$: unallocated settled-flow carry (signed), from \emph{all} settlement supply sources modeled.
+  \item $B_s\in\mathbb{Z}$: cumulative externally-notified broker-to-broker settled flow (signed).
+  \item $D_s\subseteq EID$: deduplication set of external settlement event identifiers already applied.
   \item $P_s:ID_s\rightharpoonup\{\mathsf{pending},\mathsf{published}\}$: publication status map.
   \item $K_s\in\mathbb{Z}_{\ge 0}$: durable input cursor (last committed position) for the per-security ordered message stream.
   \item $\Theta_s$: configuration and strategy parameters.
@@ -287,12 +301,12 @@ ID = \biguplus_{s\in S} ID_s,
 
 \subsection{Persistence Model}
 
-All components $(O_s,Tr_s,A_s,U_s,P_s,K_s)$ are persistent and survive crashes. Runtime-only structures are volatile and omitted.
+All components $(O_s,Tr_s,A_s,U_s,B_s,D_s,P_s,K_s)$ are persistent and survive crashes. Runtime-only structures are volatile and omitted.
 
 \subsection{Initial State}
 
 \[
-\sigma_{0,s} = (0,\ \emptyset,\ \emptyset,\ 0,\ \emptyset,\ 0,\ \Theta_s).
+\sigma_{0,s} = (0,\ \emptyset,\ \emptyset,\ 0,\ 0,\ \emptyset,\ \emptyset,\ 0,\ \Theta_s).
 \]
 
 \subsection{Per-Shard Actions}
@@ -304,33 +318,33 @@ All components $(O_s,Tr_s,A_s,U_s,P_s,K_s)$ are persistent and survive crashes. 
 \begin{aligned}
 \mathsf{SOD\_RECON}_s(x),\ &\mathsf{MT570}_s(x),\\
 \mathsf{SETTLE\_BATCH}_s(x),\ &\mathsf{CLIENT\_TRADE}_s(t),\\
-\mathsf{ALLOCATE}_s,\ &\mathsf{PUBLISH}_s(id),\\
-\mathsf{EOD\_RECON}_s,\ &\mathsf{CRASH}_s,\\
-\mathsf{RESTART}_s &
+\mathsf{B2B\_SETTLE}_s(eid,x),\ &\mathsf{ALLOCATE}_s,\\
+\mathsf{PUBLISH}_s(id),\ &\mathsf{EOD\_RECON}_s,\\
+\mathsf{CRASH}_s,\ &\mathsf{RESTART}_s
 \end{aligned}
 \right\}
 \end{equation*}
 
-where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, and $id\in ID_s$.
+where $x\in\mathbb{Z}$, $t\in T$ with $sec(t)=s$, $id\in ID_s$, and $eid\in EID$.
 
 \subsection{Transactional Processing Discipline}
 
 \khead{Atomicity assumption (exactly-once engine):}
-For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
+For any input-driven action ($\mathsf{MT570}_s(\cdot)$, $\mathsf{SETTLE\_BATCH}_s(\cdot)$, $\mathsf{CLIENT\_TRADE}_s(\cdot)$, $\mathsf{B2B\_SETTLE}_s(\cdot,\cdot)$, $\mathsf{PUBLISH}_s(\cdot)$), the implementation executes a single atomic transaction that:
 \begin{enumerate}[leftmargin=*,topsep=0.25em,itemsep=0.15em]
-  \item persists the resulting shard state updates ($A_s,U_s,P_s,O_s,Tr_s$),
+  \item persists the resulting shard state updates ($A_s,U_s,B_s,D_s,P_s,O_s,Tr_s$),
   \item emits the corresponding output message(s) to the downstream lending interface when applicable
         (notably for $\mathsf{CLIENT\_TRADE}_s(t)$ and $\mathsf{PUBLISH}_s(id)$),
   \item and advances the durable input cursor $K_s$ to acknowledge the consumed input record.
 \end{enumerate}
-If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records. 
+If a crash occurs before commit, \emph{none} of these effects become visible; on restart, the system resumes from the last committed $K_s$ and reprocesses remaining input records.
 
 \subsection{Derived Quantities}
 
 \[
 Need_s \triangleq \sum_{t \in Tr_s} qty^{open}(t).
 \]
-This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed: 
+This $Need_s$ represents the \emph{net} open settlement demand from all client trades for security $s$ (signed:
 receive positive, deliver negative). It guides allocation decisions and appears in the end-of-day reconciliation equation.
 
 % ===================== TRANSITIONS =====================
@@ -374,6 +388,29 @@ O_s' = x.
 
 \textbf{Business Logic:} Allocatable settled flow is created only when $|O_s|$ decreases (or the sign flips, settling the prior side).
 Pure increases in $|O_s|$ represent new/expanded obligations and do not create allocatable settled flow.
+
+\subsubsection{External Broker-to-Broker Settlement Notification (CNS Bypass)}
+
+An external system may notify that settlement has occurred broker-to-broker for security $s$:
+\[
+\sigma_s \xrightarrow{\mathsf{B2B\_SETTLE}_s(eid,x)}_s \sigma_s'
+\]
+
+\textbf{Precondition (idempotence/dedup):} $eid\notin D_s$.
+
+\textbf{Processing:} Within a single atomic transaction, record the event id, update cumulative external settled flow,
+and add the settled quantity into allocatable carry:
+\[
+D_s' = D_s \cup \{eid\},
+\qquad
+B_s' = B_s + x,
+\qquad
+U_s' = U_s + x,
+\qquad
+O_s' = O_s.
+\]
+
+\textbf{Interpretation:} External settlement creates allocatable supply for allocation (via $U_s$) without changing CNS obligations ($O_s$ remains the CNS truth).
 
 \subsubsection{Client Trade Arrival}
 
@@ -426,7 +463,7 @@ where each component $X_t$ is the signed quantity allocated to trade $t$.
 If $d=0$, then $X_t=0$ for all $t$.
 Otherwise the plan must satisfy:
 \[
-\forall t\in Tr_s:\ 
+\forall t\in Tr_s:\
 \begin{cases}
 X_t = 0, & \text{if } \sgn(open_s(t))\neq d,\\
 0 \le d\cdot X_t \le d\cdot open_s(t), & \text{if } \sgn(open_s(t))=d,
@@ -451,7 +488,7 @@ Intuitively, receive-side carry ($U_s>0$) is allocated only to receive-open trad
 U_s' = U_s - \sum_{t\in Tr_s} X_t.
 \]
 
-\textbf{Partial Allocation Behavior:} The operator may allocate zero to some or all trades. If $X_t=0$ for all $t$, then $U_s$ remains unchanged, representing explicit carry forward. This supports partial settlements on either side.
+\textbf{Partial Allocation Behavior:} The operator may allocate zero to some or all trades. If $X_t=0$ for all $t$, then $U_s$ remains unchanged, representing explicit carry forward. This supports partial settlements on either side and across mixed settlement supply sources.
 
 \subsubsection{Exactly-Once Publication to Lending}
 
@@ -479,16 +516,16 @@ P_s'(id)=\mathsf{published}.
 
 \subsubsection{End-of-Day Reconciliation}
 
-At end of day, the system reconciles its internal state with CNS obligations:
+At end of day, the system reconciles its internal state with CNS obligations and any externally-notified settlement:
 \[
 \sigma_s \xrightarrow{\mathsf{EOD\_RECON}_s}_s \sigma_s'
 \]
 
-\textbf{Discrepancy Calculation:} Compute the signed difference between CNS and the system's tracked decomposition:
+\textbf{Discrepancy Calculation:} Compute the signed difference between the \emph{total} PB-side position signal and the system's tracked decomposition:
 \[
-\epsilon_s \triangleq O_s - (Need_s + U_s).
+\epsilon_s \triangleq (O_s + B_s) - (Need_s + U_s).
 \]
-Here $O_s$ is CNS net open obligation, while $(Need_s + U_s)$ is the system's net open trade demand plus unallocated carry.
+Here $O_s$ is CNS net open obligation, $B_s$ is cumulative externally-notified settled flow, while $(Need_s + U_s)$ is the system's net open trade demand plus unallocated carry.
 
 \textbf{Processing:} The discrepancy $\epsilon_s$ is recorded externally (e.g., in a break table for investigation). The shard state itself remains unchanged:
 \[
@@ -512,7 +549,9 @@ The $\bot_s$ state represents a crashed shard where durable state survives but v
 \bot_s \xrightarrow{\mathsf{RESTART}_s}_s \sigma_s'.
 \]
 
-\textbf{Recovery Model:} On restart, the shard restores the last \emph{committed} persistent state $(O_s,Tr_s,A_s,U_s,P_s,K_s)$. Processing resumes from the durable message log at position $K_s+1$. Any in-flight (uncommitted) transition at the time of crash is rolled back (i.e., has no visible effect), and its input record is eligible for reprocessing.
+\textbf{Recovery Model:} On restart, the shard restores the last \emph{committed} persistent state $(O_s,Tr_s,A_s,U_s,B_s,D_s,P_s,K_s)$.
+Processing resumes from the durable message log at position $K_s+1$.
+Any in-flight (uncommitted) transition at the time of crash is rolled back (i.e., has no visible effect), and its input record is eligible for reprocessing.
 
 \subsection{Allocation Strategy as an Operator}
 \label{sec:alloc-operator}
@@ -532,7 +571,6 @@ We model the pluggable allocation strategy as an operator that produces an alloc
 
 \paragraph{Core operator properties.}
 For any output plan
-\hfill\break
 $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
 \begin{enumerate}[leftmargin=*]
   \item \khead{Feasibility:}
@@ -551,7 +589,6 @@ $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
   \item \khead{Eligibility compliance:}
   if $\neg eligible_s(t)$ then $X_t=0$.
   \item \khead{Work-conserving:}
-\hfill\break
   if $U_s\neq 0$ and $\exists t: eligible_s(t)\wedge \sgn(open_s(t))=\sgn(U_s)$ then $\sum_t X_t\neq 0$.
 \end{enumerate}
 
@@ -604,14 +641,20 @@ In any $\mathsf{ALLOCATE}_s$ transition with pre-state carry $U_s$, the chosen p
 Immediate from the feasibility constraint $0 \le d\cdot \sum_t X_t \le d\cdot U_s$ with $d=\sgn(U_s)$.
 \end{proof}
 
-\begin{proposition}[Allocation Conservation]
-For each $s$, allocations are bounded by cumulative settled flow implied by CNS updates: carry evolves as
-$U_s := U_s + \Delta settle(s)$ on CNS updates and $U_s := U_s - \sum_t X_t$ on allocations, so total allocated
-flow cannot exceed the cumulative settled flow on either side.
+\begin{proposition}[Allocation Conservation Across Multiple Settlement Sources]
+For each $s$, carry evolves as:
+\[
+\begin{aligned}
+&U_s := U_s + \Delta settle(s) &&\text{on CNS updates},\\
+&U_s := U_s + x &&\text{on }\mathsf{B2B\_SETTLE}_s(eid,x),\\
+&U_s := U_s - \sum_t X_t &&\text{on allocations}.
+\end{aligned}
+\]
+Thus total allocated flow cannot exceed the cumulative settled flow contributed by CNS plus externally-notified settlement, on either side.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-By construction, carry is the residual between cumulative settled flow and cumulative allocated flow; feasibility prevents allocating more than the current residual magnitude.
+By construction, $U_s$ is the residual between cumulative settled flow (from both CNS-induced and external sources) and cumulative allocated flow; feasibility prevents allocating more than the current residual magnitude.
 \end{proof}
 
 % ===================== EXACTLY ONCE =====================
@@ -635,7 +678,6 @@ $P_s$ is persistent. By the transactional discipline, once the published state i
 \end{proof}
 
 \begin{proposition}[No Lost Allocations Across Crash]
-\hfill\break
 If $(id,t,q)\in A_s$ before a crash, then $(id,t,q)\in A_s$ after restart.
 \end{proposition}
 
@@ -651,6 +693,15 @@ Under the transactional discipline (atomic state update + downstream publication
 At-most-once: a committed publication advances the cursor and marks $P_s(id)=\mathsf{published}$, so reprocessing the same trigger cannot re-emit a committed publication.
 At-least-once: if a crash happens before commit, the cursor does not advance and the trigger is reprocessed after restart, leading to eventual publication.
 Downstream idempotence makes any residual duplicate deliveries harmless.
+\end{proof}
+
+\begin{proposition}[Exactly-Once Application of External Settlement Notifications]
+For any $eid\in EID$, at most one committed transition $\mathsf{B2B\_SETTLE}_s(eid,\cdot)$ is applied to shard state.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+The precondition $eid\notin D_s$ and monotone update $D_s := D_s\cup\{eid\}$ ensure the event id cannot be applied twice.
+With transactional processing, either the update is committed (and survives crash) or it is rolled back and the input is retried.
 \end{proof}
 
 % ===================== FAIRNESS =====================
@@ -683,23 +734,25 @@ Immediate from weak fairness.
 \paragraph{Per-Security Reconciliation Equation.}
 At end-of-day for each $s$:
 \[
-O_s = Need_s + U_s + \epsilon_s,
+(O_s + B_s) = Need_s + U_s + \epsilon_s,
 \]
 where $\epsilon_s$ is an explicitly recorded signed discrepancy.
 
 \begin{proposition}[Crash-Resilient Convergence Under Stabilization]
 Assume: (i) CNS obligations stabilize by EOD, (ii) there exists a time after which no new trades arrive,
 (iii) enabled allocation and publish actions are retried indefinitely, (iv) the allocation strategy is weakly fair,
-and (v) only finitely many crashes occur. Then for each security $s$ the system reaches a state with
+(v) only finitely many crashes occur, and (vi) the external settlement stream is either finite by EOD or stabilizes by EOD.
+Then for each security $s$ the system reaches a state with
 \[
 \epsilon_s=0
 \quad\text{and}\quad
-O_s=Need_s+U_s.
+(O_s + B_s)=Need_s+U_s.
 \]
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-After stabilization, $O_s$ is constant so $U_s$ stops changing due to CNS inputs. With no new trades, progress comes only from allocation.
+After stabilization, $O_s$ is constant and no further external settlements arrive, so $U_s$ stops changing due to inputs.
+With no new trades, progress comes only from allocation.
 While $U_s\neq 0$ and there exist same-side open trades ($\exists t:\ qty^{open}(t)\neq 0 \wedge \sgn(qty^{open}(t))=\sgn(U_s)$),
 weak fairness yields allocations that reduce same-side open demand toward $0$ until either same-side demand is exhausted or $U_s$ reaches $0$,
 implying $\epsilon_s=0$. Crashes do not erase committed progress because persistent state and the durable cursor restore the shard to its last committed point.
@@ -710,11 +763,12 @@ implying $\epsilon_s=0$. Crashes do not erase committed progress because persist
 
 Each security $s$ can be implemented as a shard with:
 \begin{itemize}[leftmargin=*]
-  \item a durable state store for $(O_s,Tr_s,A_s,U_s,P_s)$,
+  \item a durable state store for $(O_s,Tr_s,A_s,U_s,B_s,D_s,P_s)$,
   \item a \kfeat{durable ordered message log} providing per-security input streams and a \kfeat{durable cursor} $K_s$,
   \item a \kfeat{transactional processing engine} that commits \emph{atomically}: (i) state updates, (ii) downstream publication (or an outbox/outbound stream append), and (iii) cursor advancement,
   \item a \kfeat{strategy plugin} implementing the operator $\mathcal{F}_{s,\Theta_s}$,
-  \item a publisher that retries \kfeat{pending allocations} until \kfeat{published}.
+  \item a publisher that retries \kfeat{pending allocations} until \kfeat{published},
+  \item an external settlement ingestor that feeds $\mathsf{B2B\_SETTLE}_s(eid,x)$ events and enforces idempotence using $eid$.
 \end{itemize}
 
 \end{document}
