@@ -592,6 +592,114 @@ $X=\mathcal{F}_{s,\Theta}(Tr_s,Open_s,U_s)$, let $d\triangleq \sgn(U_s)$:
   if $U_s\neq 0$ and $\exists t: eligible_s(t)\wedge \sgn(open_s(t))=\sgn(U_s)$ then $\sum_t X_t\neq 0$.
 \end{enumerate}
 
+\subsubsection{Example Client-Fair Allocation Operators (Deterministic and Randomized)}
+\label{sec:alloc-examples}
+
+This section gives \emph{examples} of allocation operators $\mathcal{F}_{s,\Theta}$ that are fair \emph{across clients}
+rather than across individual trades. These are illustrative and need not match the eventual implementation.
+
+\paragraph{Client-level aggregation.}
+For a fixed security $s$ and side $d\triangleq \sgn(U_s)$, define the eligible trade set on the carry side:
+\[
+Tr_s^{d} \triangleq \{\, t\in Tr_s \mid eligible_s(t)\wedge \sgn(open_s(t))=d \,\}.
+\]
+Define client-level open demand (signed) on that side:
+\[
+Open_s^d(c) \triangleq \sum_{t\in Tr_s^{d}:~client(t)=c} open_s(t),
+\qquad c\in C.
+\]
+Note $Open_s^d(c)$ has sign $d$ (or is $0$). Let the eligible client set be
+\[
+C_s^d \triangleq \{\, c\in C \mid Open_s^d(c)\neq 0 \,\}.
+\]
+A client-fair operator first chooses a \emph{client allocation} $Y\in \mathbb{Z}^{C_s^d}$ satisfying
+\[
+\forall c\in C_s^d:\ 0 \le d\cdot Y_c \le d\cdot Open_s^d(c),
+\qquad
+0 \le d\cdot \sum_{c\in C_s^d} Y_c \le d\cdot U_s,
+\]
+and then distributes each client’s $Y_c$ across that client’s trades (e.g., FIFO by trade time, or pro-rata).
+
+\paragraph{Within-client distribution (example: FIFO).}
+Fix any deterministic total order $\prec$ on trades for the same client (e.g., arrival time, then trade id).
+For each client $c$, distribute $Y_c$ over trades
+\[
+\{t\in Tr_s^d \mid client(t)=c\}
+\]
+in $\prec$ order, allocating each trade up to its open amount until $Y_c$ is exhausted.
+This yields a trade-level plan $X\in \mathbb{Z}^{Tr_s}$.
+
+\begin{remark}[Client fairness scope]
+Client fairness means that, under repeated partial settlements, \emph{no client with persistent same-side open demand}
+is starved by other clients. This is stronger than trade-level weak fairness when one client has many trades.
+\end{remark}
+
+\subsubsection{Example 1: Deterministic Client-Fair Operator (Deficit Round Robin)}
+\label{sec:alloc-drr}
+
+\paragraph{Parameters.}
+Let $\Theta_s$ include:
+(i) a fixed cyclic order $\pi$ of clients (a permutation of $C$),
+(ii) a quantum $q\in\mathbb{Z}_{>0}$ (in shares),
+and (iii) persistent per-security state variables
+a pointer $p_s\in \{1,\dots,|C|\}$ and deficits $def_s:C\to \mathbb{Z}_{\ge 0}$.\footnote{These can be modeled as part of $\Theta_s$ (configuration+strategy state) or split into explicit shard state.}
+
+\paragraph{DRR step (informal).}
+Let $cap \triangleq |U_s|$ and work on the side $d=\sgn(U_s)$.
+Iterate clients in cyclic order starting at $p_s$.
+When visiting client $c$, increase $def_s(c) := def_s(c)+q$.
+If $Open_s^d(c)\neq 0$, allocate
+\[
+a_c \triangleq \min\{\, def_s(c),\ |Open_s^d(c)|,\ cap_{rem}\,\},
+\]
+set $Y_c := d\cdot a_c$, decrease $def_s(c):=def_s(c)-a_c$ and $cap_{rem}:=cap_{rem}-a_c$.
+Continue until $cap_{rem}=0$ or all clients were visited with no further allocation possible.
+Finally advance the pointer $p_s$ to the next client after the last visited one.
+Then distribute $Y_c$ within client (e.g., FIFO) to obtain $X$.
+
+\paragraph{Why it is fair (intuition).}
+If a client $c$ remains eligible (same-side open demand persists), then on each full cycle its deficit grows by $q$,
+so eventually $def_s(c)$ becomes large enough to claim allocation whenever supply exists.
+Thus no persistently eligible client is starved by other clients.
+
+\subsubsection{Example 2: Randomized Client-Fair Operator (Weighted Lottery with Deterministic Seed)}
+\label{sec:alloc-lottery}
+
+\paragraph{Parameters.}
+Let $\Theta_s$ include a weight function $w:C\to \mathbb{R}_{>0}$ and a deterministic seed function
+\[
+seed_s \triangleq H(s, K_s, \text{alloc\_epoch}_s),
+\]
+where $H$ is a hash and $\text{alloc\_epoch}_s$ is a monotonically increasing counter for $\mathsf{ALLOCATE}_s$ invocations.
+(Using a seed makes the randomized choice \emph{replayable} under crash recovery.)
+
+\paragraph{Lottery allocation (client-level).}
+Let $cap \triangleq |U_s|$ and $d=\sgn(U_s)$.
+Define client weights on the active side:
+\[
+\omega(c) \triangleq w(c)\cdot |Open_s^d(c)| \quad \text{for } c\in C_s^d.
+\]
+Repeatedly sample clients with probability proportional to $\omega(c)$ (using PRNG seeded by $seed_s$)
+and allocate them one unit at a time (or in chunks), subject to $|Open_s^d(c)|$ and remaining $cap$,
+until $cap$ is exhausted or no eligible clients remain.
+This produces $Y$ and then (via FIFO or pro-rata within client) a trade-level plan $X$.
+
+\paragraph{Fairness guarantee (in expectation).}
+If a client $c$ remains persistently eligible (same-side) and supply events recur,
+then in each allocation step it has nonzero probability of receiving units, bounded below by
+\[
+\Pr[c\ \text{chosen}] \ge \frac{\omega(c)}{\sum_{c'\in C_s^d}\omega(c')}.
+\]
+Hence the probability that $c$ is starved for infinitely many opportunities is $0$ (under standard independence assumptions),
+and its long-run expected allocation share approaches its weight proportion.
+
+\begin{remark}[Deterministic randomness for exactly-once + replay]
+Although this operator is \emph{randomized} mathematically, the seeded PRNG makes each $\mathsf{ALLOCATE}_s$
+decision a deterministic function of durable inputs and state (e.g., $(s,K_s,\text{alloc\_epoch}_s)$),
+preserving reproducibility under crash recovery.
+\end{remark}
+
+
 % ===================== CONCURRENCY =====================
 \section{Concurrency Properties Induced by Partitioning}
 \label{sec:concurrency}
