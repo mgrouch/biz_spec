@@ -5,7 +5,7 @@
 \usepackage{lmodern}
 \usepackage{microtype}
 \usepackage{mathtools,amssymb,amsfonts}
-\usepackage{bm}
+\usepackage{bm}           % bold math
 \usepackage{siunitx}
 \usepackage{geometry}
 \usepackage{hyperref}
@@ -14,10 +14,12 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 
+% ===================== Layout =====================
 \geometry{margin=0.68in}
 \setlength{\columnsep}{0.22in}
 \setlist[itemize]{leftmargin=*,itemsep=2pt,topsep=2pt}
 \setlist[enumerate]{leftmargin=*,itemsep=2pt,topsep=2pt}
+\setlength{\emergencystretch}{2em} % helps avoid overfull boxes
 
 \hypersetup{
   colorlinks=true,
@@ -29,193 +31,209 @@
 % ===================== Macros =====================
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\SO}{\mathrm{SO}}
-\newcommand{\skew}[1]{\left[#1\right]_{\times}}
 \newcommand{\diag}{\mathrm{diag}}
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\I}{\mathbf{I}}
 \newcommand{\0}{\mathbf{0}}
 
-\newcommand{\qref}{\mathbf{q}_{\text{ref}}}
+% Skew matrix: [v]_x such that [v]_x u = v x u
+\newcommand{\skew}[1]{\left[#1\right]_{\times}}
+
+% Quaternions / rotations
+\newcommand{\qref}{\mathbf{q}_{\mathrm{ref}}}     % WORLD -> BODY'
+\newcommand{\RwB}{\mathbf{R}_{wb}}                % WORLD -> BODY' (matrix of qref)
+\newcommand{\RbW}{\mathbf{R}_{bw}}                % BODY' -> WORLD
 \newcommand{\dth}{\delta\bm{\theta}}
 \newcommand{\bg}{\mathbf{b}_g}
 \newcommand{\ba}{\mathbf{b}_a}
-\newcommand{\aw}{\mathbf{a}_w}
-\newcommand{\gvec}{\mathbf{g}}
-\newcommand{\RwB}{\mathbf{R}_{wb}}
-\newcommand{\RbW}{\mathbf{R}_{bw}}
-\newcommand{\eThree}{\mathbf{e}_3}
-
-\newcommand{\pvec}{\mathbf{p}}
-\newcommand{\vvec}{\mathbf{v}}
 \newcommand{\w}{\bm{\omega}}
+\newcommand{\gvec}{\mathbf{g}}
+\newcommand{\aw}{\mathbf{a}_w}
 \newcommand{\accm}{\mathbf{a}_m}
 \newcommand{\magm}{\mathbf{m}_m}
-
-\newcommand{\Hs}{H_s}
+\newcommand{\eThree}{\mathbf{e}_3}
 \newcommand{\Ts}{\Delta t}
-\newcommand{\eps}{\varepsilon}
+\newcommand{\Hs}{H_s}
 
 \newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
 
+% ===================== Title =====================
 \title{\vspace{-0.35in}\bfseries
 Kalman3D\_Wave\_2: Broadband Oscillator Sea-State + Quaternion Error-State Attitude\\
 Full Mathematics, Discretization, and Implementation-Traceable Algorithms
 }
 \author{Mikhail Grushinskiy}
-\date{\vspace{-0.3in}}
+\date{\vspace{-0.35in}}
 
 \begin{document}
 \maketitle
 \vspace{-0.25in}
 
 \begin{abstract}
-This note fully documents the math and implementation of a marine IMU fusion filter that combines:
-(i) a quaternion error-state attitude filter (qMEKF style, right-multiply corrections), (ii) a broadband sea-motion model represented as a bank of damped oscillators producing wave displacement/velocity/acceleration in WORLD, and (iii) robust tilt-compensated magnetometer yaw correction using a direction-only residual and 180\textdegree\ ambiguity handling.
-We provide continuous-time models, discrete-time propagation including the closed-form oscillator transition for under/critical/over-damped regimes and Simpson-rule noise integration, measurement Jacobians and Joseph-form covariance update, warmup/bias gating policies, and an optional stabilization approximation that forces axis-independent covariance by removing cross-axis blocks.
-Algorithm listings are written to be directly traceable to the reference implementation functions:
-\texttt{time\_update}, \texttt{measurement\_update\_acc\_only}, \texttt{measurement\_update\_mag\_only}, \texttt{discretize\_osc\_axis\_}, and \texttt{joseph\_update3\_}.
+This document describes a marine IMU fusion method that combines:
+(i) quaternion error-state attitude estimation (qMEKF-style, right-multiply corrections),
+(ii) a broadband sea-motion model implemented as a bank of damped oscillators producing displacement, velocity, and acceleration in WORLD, and
+(iii) robust tilt-compensated magnetometer yaw correction using a direction-only residual with $180^\circ$ ambiguity handling.
+We provide continuous-time models, discrete-time propagation (including closed-form oscillator transitions for under/critical/over-damped regimes and Simpson-rule noise integration),
+accelerometer and magnetometer measurement models and Jacobians, NIS gating, a Joseph-form covariance update, warmup/bias gating logic, and an optional stabilization approximation that removes cross-axis covariances to force per-axis independence.
 \end{abstract}
 
 % ==============================================================================
-\section{Frames, Quaternion Convention, and Error State}
+\section{Frames, Conventions, and Update Order}
+
 \paragraph{Frames.}
-WORLD is typically NED: $+Z$ points \emph{down}. BODY' is a virtual un-heeled body frame (heel handling is external, but the filter supports an internal de-heel rotation for IMU vectors).
+WORLD is NED by default, with $+Z$ pointing \emph{down}. BODY' is a \emph{virtual} un-heeled body frame. (Heel handling is a separate rotation; the filter may ``de-heel'' IMU vectors and provide a ``boat quaternion'' externally.)
 
 \paragraph{Stored quaternion.}
 The filter stores a reference quaternion
 \[
-\qref:\ \text{WORLD}\rightarrow \text{BODY'}.
+\qref:\ \text{WORLD}\rightarrow\text{BODY'}.
 \]
-Its direction cosine matrix is $\RwB=\mathbf{R}(\qref)\in\SO(3)$ and $\RbW=\RwB^\top$.
+Its rotation matrix is $\RwB=\mathbf{R}(\qref)\in\SO(3)$ and $\RbW=\RwB^\top$.
 
-\paragraph{Right-multiply correction.}
-The attitude error is a small rotation vector $\dth\in\R^3$. Correction is
+\paragraph{Error-state correction.}
+Attitude error is a small rotation vector $\dth\in\R^3$, applied by right multiplication:
 \begin{equation}
 \qref \leftarrow \qref \otimes \delta q,\qquad
-\delta q = \exp\!\left(\frac{1}{2}\dth\right),\qquad
+\delta q=\exp\!\left(\tfrac12\,\dth\right),\qquad
 \dth\leftarrow \0.
 \label{eq:q_correction}
 \end{equation}
-All Jacobians in this note assume the same sign and update convention used by the implementation.
+All Jacobians in this document assume this correction convention.
 
-\paragraph{Per-step ordering (per IMU sample).}
+\paragraph{Per-sample update order.}
+For each IMU sample:
 \begin{enumerate}
-\item \textbf{Time update:} propagate $\qref$ using gyro, propagate wave states, propagate covariance.
-\item \textbf{Accel update:} specific-force measurement update (with warmup/bias logic).
-\item \textbf{Mag update:} delayed robust direction-only yaw correction (often base-only).
-\item \textbf{Stability:} symmetrize, clamp diagonal, PSD projection, and optional axis-independence enforcement.
+\item Time update: propagate $\qref$, propagate oscillator states, propagate covariance.
+\item Accelerometer update: specific-force measurement update (with warmup/bias gating).
+\item Magnetometer update: delayed, direction-only yaw correction (often restricted to base states).
+\item Stability: symmetrize, clamp diagonal, PSD projection; optionally remove cross-axis covariances.
 \end{enumerate}
+
+\paragraph{Implementation mapping (function names).}
+For traceability, the key functions are:
+\begin{itemize}
+\item \texttt{time\_update}
+\item \texttt{measurement\_update\_acc\_only}
+\item \texttt{measurement\_update\_mag\_only}
+\item \texttt{discretize\_osc\_axis\_} (per-axis oscillator $\Phi,Q_d$)
+\item \texttt{joseph\_update3\_}
+\end{itemize}
 
 % ==============================================================================
 \section{State Vector and Dimension}
-Let $K$ denote \texttt{KMODES}. For each mode $k\in\{1,\dots,K\}$, wave displacement and velocity in WORLD are $\pvec_k,\vvec_k\in\R^3$.
+
+Let $K$ be the number of oscillator modes (compile-time constant \texttt{KMODES}). Each mode has displacement $\mathbf{p}_k\in\R^3$ and velocity $\mathbf{v}_k\in\R^3$ in WORLD.
 
 \subsection{State definition}
+The error-state vector is
 \begin{equation}
 \mathbf{x}=
 \begin{bmatrix}
-\dth \\
-(\bg) \\
-\pvec_1\\ \vvec_1\\
+\dth\\
+(\bg)\\
+\mathbf{p}_1\\ \mathbf{v}_1\\
 \vdots\\
-\pvec_K\\ \vvec_K\\
+\mathbf{p}_K\\ \mathbf{v}_K\\
 (\ba)
-\end{bmatrix}.
+\end{bmatrix},
 \label{eq:state}
 \end{equation}
-$\bg,\ba$ are optional (compile-time toggles).
+where gyro bias $\bg$ and accelerometer bias $\ba$ are optional compile-time blocks.
 
 \subsection{Dimension}
+The dimension is
 \begin{equation}
-N_X = (\texttt{with\_gyro\_bias ? }6:3) + 6K + (\texttt{with\_accel\_bias ? }3:0).
+N_X =
+\underbrace{\begin{cases}
+3 & \text{attitude error only}\\
+6 & \text{attitude error + gyro bias}
+\end{cases}}_{\text{base}}
++
+\underbrace{6K}_{\text{wave block}}
++
+\underbrace{\begin{cases}
+3 & \text{+ accel bias}\\
+0 & \text{no accel bias}
+\end{cases}}_{\text{accel bias}}.
 \label{eq:nx}
 \end{equation}
 With defaults $K=3$, gyro bias on, accel bias on: $N_X=27$.
 
-\subsection{Implementation state ordering (critical)}
-Within each mode $k$, the implementation stores
+\subsection{Wave block ordering (critical)}
+For each mode $k$, the stored order is \emph{p then v}:
 \[
-\mathbf{x}_k = [p_{k,x},p_{k,y},p_{k,z},\ v_{k,x},v_{k,y},v_{k,z}]^\top,
+\mathbf{x}_k =
+\begin{bmatrix}
+p_{k,x}&p_{k,y}&p_{k,z}&v_{k,x}&v_{k,y}&v_{k,z}
+\end{bmatrix}^{\!\top}.
 \]
-i.e., \textbf{p(3) then v(3)}. Discretization blocks must be assembled to match this ordering.
+This determines how the $6\times 6$ discretization is assembled from per-axis $2\times 2$ blocks.
 
 % ==============================================================================
 \section{Continuous-Time Process Models}
 
-\subsection{Attitude error-state model}
-Let measured angular rate be $\w_m$ in BODY' and the estimated gyro bias be $\bg$. The bias-corrected rate is $\w=\w_m-\bg$.
-A standard small-error model consistent with right-multiply correction is:
+\subsection{Attitude and gyro bias (error-state form)}
+Let measured angular rate in BODY' be $\w_m$ and estimated gyro bias be $\bg$. Define $\w=\w_m-\bg$.
+A standard small-error model consistent with right-multiply correction is
 \begin{align}
-\dot{\dth} &= -\skew{\w}\,\dth\ -\ \delta\bg\ -\ \mathbf{n}_g,\label{eq:ct_dth}\\
-\dot{\delta\bg} &= \mathbf{n}_{bg},\label{eq:ct_bg}
+\dot{\dth} &= -\skew{\w}\,\dth\ -\ \delta\bg\ -\mathbf{n}_g, \label{eq:ct_dth}\\
+\dot{\delta\bg} &= \mathbf{n}_{bg}, \label{eq:ct_bg}
 \end{align}
-where $\mathbf{n}_g$ is gyro noise and $\mathbf{n}_{bg}$ is gyro-bias random walk. (If gyro bias is disabled, drop $\bg$ terms.)
+with diagonal noise PSDs $\mathbf{Q}_g$ and $\mathbf{Q}_{bg}$ (implementation uses diagonal matrices).
 
-\subsection{Broadband wave oscillator bank}
+\subsection{Broadband oscillator model (per mode, per axis)}
 For each mode $k$ and each axis independently:
 \begin{align}
-\dot p_k &= v_k,\label{eq:osc_p}\\
-\dot v_k &= -\omega_k^2 p_k - 2\zeta_k\omega_k v_k + \xi_k(t),\label{eq:osc_v}
+\dot p_k &= v_k, \\
+\dot v_k &= -\omega_k^2 p_k - 2\zeta_k\omega_k v_k + \xi_k(t),
 \end{align}
-where $\xi_k(t)$ is white noise driving $v_k'$ with intensity $q_k$:
+with white driving noise $\xi_k$:
 \[
 \E[\xi_k(t)\xi_k(\tau)] = q_k\,\delta(t-\tau),\qquad q_k\ [\si{m^2/s^5}].
 \]
-Per-axis state $\mathbf{s}_{k,a}=[p_{k,a},v_{k,a}]^\top$ has LTI form
+In LTI form for one axis, $\mathbf{s}=[p,v]^\top$:
 \[
-\dot{\mathbf{s}} = \mathbf{A}\mathbf{s} + \mathbf{G}\,\xi,\qquad
+\dot{\mathbf{s}} = \mathbf{A}\mathbf{s}+\mathbf{G}\xi,\qquad
 \mathbf{A}=\begin{bmatrix}0&1\\-\omega^2&-2\zeta\omega\end{bmatrix},\quad
 \mathbf{G}=\begin{bmatrix}0\\1\end{bmatrix}.
 \]
 
-\subsection{Wave acceleration in WORLD}
-The WORLD wave acceleration reconstructed from oscillator states is
+\subsection{Wave acceleration reconstruction in WORLD}
+The oscillator bank produces WORLD wave acceleration
 \begin{equation}
-\aw = \sum_{k=1}^{K}\left(-\omega_k^2\pvec_k - 2\zeta_k\omega_k\vvec_k\right).
+\aw=\sum_{k=1}^{K}\left(-\omega_k^2\mathbf{p}_k-2\zeta_k\omega_k\mathbf{v}_k\right).
 \label{eq:aw}
 \end{equation}
 
-\subsection{Accelerometer bias random walk (optional)}
-If enabled:
-\[
-\dot{\delta\ba} = \mathbf{n}_{ba}.
-\]
-
 % ==============================================================================
-\section{Discrete-Time Discretization and Propagation}
+\section{Discrete-Time Propagation}
 
 \subsection{Quaternion propagation}
-With $\w=\w_m-\bg$, propagate
+With $\w=\w_m-\bg$, the quaternion is propagated as
 \begin{equation}
-\qref_{k+1} = \qref_k \otimes \exp\!\left(\frac{1}{2}\w\Ts\right).
+\qref_{k+1}=\qref_{k}\otimes\exp\!\left(\tfrac12\,\w\,\Ts\right).
 \label{eq:q_prop}
 \end{equation}
+(Here $\qref_k$ denotes the value of $\qref$ at time step $k$; we do \emph{not} write \texttt{\textbackslash qref\_} in LaTeX to avoid double subscripts.)
 
-\subsection{Base block $(\dth,\bg)$ discretization}
-The implementation uses an ``exact-ish'' discrete noise covariance built from integrals of rotated noise.
-Define the skew matrix $\Omega=\skew{\w}$ and the rotation
-\begin{equation}
-\mathbf{R}(t)=\exp(-\Omega t)
-= \I - \sin(\|\w\|t)\,\skew{\hat{\w}} + (1-\cos(\|\w\|t))\skew{\hat{\w}}^2,
-\label{eq:R_of_t}
-\end{equation}
-with $\hat{\w}=\w/\|\w\|$.
+\subsection{Base block discretization}
+This subsection derives the discrete-time model for the $(\dth,\bg)$ base block.
 
-Define
-\begin{equation}
-\mathbf{B}(t) = -\int_0^{t}\mathbf{R}(\tau)\,d\tau.
-\label{eq:B_of_t}
-\end{equation}
-
-Let $\mathbf{Q}_g$ be gyro noise PSD (diagonal), and $\mathbf{Q}_{bg}$ be gyro-bias RW PSD (diagonal).
-The base discrete covariance (for \emph{attitude error} and \emph{gyro bias}) is assembled from:
+\paragraph{Rotation integral form.}
+Let $\Omega=\skew{\w}$, and define
+\[
+\mathbf{R}(t)=\exp(-\Omega t),\qquad
+\mathbf{B}(t)=-\int_{0}^{t}\mathbf{R}(\tau)\,d\tau.
+\]
+Then the ``exact-ish'' discrete covariance used in the implementation for the base block is built from
 \begin{align}
-\mathbf{Q}_{\theta\theta} &= \int_0^{\Ts} \mathbf{R}(t)\mathbf{Q}_g\mathbf{R}(t)^\top dt
-\;+\;\int_0^{\Ts} \mathbf{B}(t)\mathbf{Q}_{bg}\mathbf{B}(t)^\top dt,\label{eq:Qtt}\\
-\mathbf{Q}_{bb} &= \mathbf{Q}_{bg}\Ts,\label{eq:Qbb}\\
-\mathbf{Q}_{\theta b} &= \left(\int_0^{\Ts}\mathbf{B}(t)\,dt\right)\mathbf{Q}_{bg}.\label{eq:Qtb}
+\mathbf{Q}_{\theta\theta} &= \int_{0}^{\Ts}\mathbf{R}(t)\mathbf{Q}_{g}\mathbf{R}(t)^\top dt
++ \int_{0}^{\Ts}\mathbf{B}(t)\mathbf{Q}_{bg}\mathbf{B}(t)^\top dt, \label{eq:Qtt}\\
+\mathbf{Q}_{bb} &= \mathbf{Q}_{bg}\,\Ts, \label{eq:Qbb}\\
+\mathbf{Q}_{\theta b} &= \left(\int_{0}^{\Ts}\mathbf{B}(t)\,dt\right)\mathbf{Q}_{bg}. \label{eq:Qtb}
 \end{align}
-The final $6\times6$ base $Q_d$ is
+The full base $Q_d$ is
 \[
 \mathbf{Q}_{AA}=
 \begin{bmatrix}
@@ -223,19 +241,18 @@ The final $6\times6$ base $Q_d$ is
 \mathbf{Q}_{\theta b}^\top & \mathbf{Q}_{bb}
 \end{bmatrix},
 \]
-PSD-projected and symmetrized.
+followed by symmetrization and PSD projection.
 
-\paragraph{Simpson-rule approximation.}
-The implementation approximates integrals like \eqref{eq:Qtt} by Simpson quadrature at $t\in\{0,\Ts/2,\Ts\}$:
+\paragraph{Simpson integration.}
+Each integral is approximated by Simpson quadrature:
 \[
-\int_0^{\Ts} f(t)\,dt \approx \frac{\Ts}{6}\bigl(f(0)+4f(\Ts/2)+f(\Ts)\bigr),
+\int_{0}^{\Ts} f(t)\,dt \approx \frac{\Ts}{6}\bigl(f(0)+4f(\Ts/2)+f(\Ts)\bigr).
 \]
-applied to $f(t)=\mathbf{R}(t)\mathbf{Q}_g\mathbf{R}(t)^\top$ and $f(t)=\mathbf{B}(t)\mathbf{Q}_{bg}\mathbf{B}(t)^\top$.
 
-\subsection{Oscillator transition $\Phi(t)$ (explicit closed form)}
-For one axis (drop subscripts), let $a=\zeta\omega$.
+\subsection{Oscillator transition $\Phi(t)$ (closed form)}
+For one axis (drop $k$ and axis subscripts), let $a=\zeta\omega$.
 
-\paragraph{Critical damping $\zeta=1$.}
+\paragraph{Critical damping ($\zeta=1$).}
 \begin{equation}
 \Phi(t)=e^{-a t}
 \begin{bmatrix}
@@ -245,24 +262,23 @@ For one axis (drop subscripts), let $a=\zeta\omega$.
 \label{eq:phi_crit}
 \end{equation}
 
-\paragraph{Underdamped $\zeta<1$.}
+\paragraph{Underdamped ($\zeta<1$).}
 Let $\omega_d=\omega\sqrt{1-\zeta^2}$. Then
 \begin{equation}
 \Phi(t)=e^{-a t}
 \begin{bmatrix}
-\cos(\omega_d t) + \frac{a}{\omega_d}\sin(\omega_d t) & \frac{1}{\omega_d}\sin(\omega_d t)\\
--\frac{\omega^2}{\omega_d}\sin(\omega_d t) & \cos(\omega_d t) - \frac{a}{\omega_d}\sin(\omega_d t)
+\cos(\omega_d t)+\frac{a}{\omega_d}\sin(\omega_d t) & \frac{1}{\omega_d}\sin(\omega_d t)\\
+-\frac{\omega^2}{\omega_d}\sin(\omega_d t) & \cos(\omega_d t)-\frac{a}{\omega_d}\sin(\omega_d t)
 \end{bmatrix}.
 \label{eq:phi_under}
 \end{equation}
 
-\paragraph{Overdamped $\zeta>1$.}
-Let $\sqrt{\zeta^2-1}=s$ and
+\paragraph{Overdamped ($\zeta>1$).}
+Let $s=\sqrt{\zeta^2-1}$ and
 \[
 r_1=-\omega(\zeta-s),\qquad r_2=-\omega(\zeta+s).
 \]
-A numerically stable form uses $e^{r_1 t}$ and $e^{(r_2-r_1)t}$ (the implementation uses \texttt{expm1} to avoid cancellation).
-One equivalent closed form is:
+One valid closed form is
 \begin{equation}
 \Phi(t)=\frac{1}{r_2-r_1}
 \begin{bmatrix}
@@ -271,144 +287,134 @@ r_1 r_2 (e^{r_1 t}-e^{r_2 t}) & r_2 e^{r_2 t}-r_1 e^{r_1 t}
 \end{bmatrix}.
 \label{eq:phi_over}
 \end{equation}
+(Implementation uses numerically stable forms with \texttt{expm1} for near-equal exponents.)
 
-\subsection{Oscillator $Q_d$ by Simpson integration}
-With $\dot{\mathbf{s}}=\mathbf{A}\mathbf{s}+\mathbf{G}\xi$, the discrete covariance is
+\subsection{Oscillator discrete covariance $Q_d$ (Simpson)}
+With $\dot{\mathbf{s}}=\mathbf{A}\mathbf{s}+\mathbf{G}\xi$ and $\mathbf{G}=[0,1]^\top$,
 \begin{equation}
-\mathbf{Q}_d = q\int_0^{\Ts} \Phi(t)\mathbf{G}\mathbf{G}^\top\Phi(t)^\top dt.
+\mathbf{Q}_d=q\int_{0}^{\Ts}\Phi(t)\mathbf{G}\mathbf{G}^\top\Phi(t)^\top dt.
 \label{eq:qd_int}
 \end{equation}
-Since $\mathbf{G}=[0,1]^\top$, $\Phi(t)\mathbf{G}$ is simply the \textbf{second column} of $\Phi(t)$:
+Because $\mathbf{G}$ selects the second column of $\Phi(t)$, define
 \[
-\mathbf{u}(t) =
+\mathbf{u}(t)=
 \begin{bmatrix}\Phi_{01}(t)\\\Phi_{11}(t)\end{bmatrix},
-\quad
-\mathbf{Q}_d=q\int_0^{\Ts}\mathbf{u}(t)\mathbf{u}(t)^\top dt.
+\qquad
+\mathbf{Q}_d=q\int_{0}^{\Ts}\mathbf{u}(t)\mathbf{u}(t)^\top dt.
 \]
-Implementation uses Simpson:
+Simpson approximation:
 \[
-\mathbf{Q}_d \approx q\cdot\frac{\Ts}{6}\left(\mathbf{u}(0)\mathbf{u}(0)^\top
-+4\mathbf{u}(\Ts/2)\mathbf{u}(\Ts/2)^\top
-+\mathbf{u}(\Ts)\mathbf{u}(\Ts)^\top\right),
+\mathbf{Q}_d\approx q\cdot\frac{\Ts}{6}\Bigl(
+u(0)u(0)^\top + 4u(\Ts/2)u(\Ts/2)^\top + u(\Ts)u(\Ts)^\top
+\Bigr),
 \]
-then symmetrize and PSD-project.
+followed by symmetrization and PSD projection.
 
-\subsection{$6\times6$ assembly matched to $(\pvec,\vvec)$ ordering}
-For each mode $k$, we build diagonal $3\times3$ blocks from the per-axis $\Phi_{k,a}$:
+\subsection{$6\times 6$ assembly for one mode (matches p-then-v ordering)}
+Given per-axis $2\times 2$ blocks $\Phi_a$ for $a\in\{x,y,z\}$, assemble
 \[
-\Phi_{6,k}=
+\Phi_{6}=
 \begin{bmatrix}
 A & B\\
 C & D
 \end{bmatrix},
 \quad
-A=\diag(\Phi_{00}^x,\Phi_{00}^y,\Phi_{00}^z),\ 
+A=\diag(\Phi_{00}^x,\Phi_{00}^y,\Phi_{00}^z),\;
 B=\diag(\Phi_{01}^x,\Phi_{01}^y,\Phi_{01}^z),
 \]
 and similarly $C=\diag(\Phi_{10}^a)$, $D=\diag(\Phi_{11}^a)$.
-$Q_{d,6,k}$ is assembled with the same block structure from the per-axis $Q_d$ entries.
-
-\subsection{Covariance propagation (block implementation)}
-The full covariance $\mathbf{P}\in\R^{N_X\times N_X}$ is propagated by block updates consistent with:
-\[
-\mathbf{P}\leftarrow \mathbf{F}\mathbf{P}\mathbf{F}^\top+\mathbf{Q}_d.
-\]
-Implementation details:
-\begin{itemize}
-\item Base block $P_{AA}\leftarrow F_{AA}P_{AA}F_{AA}^\top+Q_{AA}$.
-\item For each mode $k$: $P_{kk}\leftarrow \Phi_{6,k}P_{kk}\Phi_{6,k}^\top+Q_{d,6,k}$.
-\item Cross blocks: $P_{Ak}\leftarrow F_{AA}P_{Ak}\Phi_{6,k}^\top$ and transpose mirror.
-\item If accel bias exists: $P_{Bak}\leftarrow P_{Bak}\Phi_{6,k}^\top$ and mirror.
-\end{itemize}
+Assemble $Q_{d,6}$ with the same block structure from per-axis $Q_d$ entries.
 
 % ==============================================================================
 \section{Accelerometer Measurement Update}
-\subsection{Measurement model}
-Accelerometer provides specific force in BODY' (after de-heel). Predicted mean:
-\begin{equation}
-\hat{\accm} = \RwB(\aw-\gvec)\;+\;\mathbf{a}_{\text{lever}}\;+\;\ba_{\text{term}},
-\label{eq:acc_pred}
-\end{equation}
-with $\gvec=[0,0,g]^\top$ in WORLD ($+Z$ down).
 
-\paragraph{Lever arm mean (optional).}
-With IMU lever arm $\mathbf{r}$ (in BODY'), angular rate $\w$, and angular acceleration $\dot{\w}\approx \bm{\alpha}$:
+\subsection{Measurement model}
+Accelerometer measures specific force in BODY' (after de-heel):
+\begin{equation}
+\accm = \RwB(\aw-\gvec) + \mathbf{a}_{\mathrm{lever}} + \ba_{\mathrm{term}} + \eta_a,
+\label{eq:acc_model}
+\end{equation}
+where WORLD gravity is $\gvec=[0,0,g]^\top$ (with $+Z$ down).
+
+\paragraph{Lever-arm mean (optional).}
+With lever arm $\mathbf{r}$ (BODY'), angular rate $\w$, and angular acceleration $\bm{\alpha}$:
 \[
-\mathbf{a}_{\text{lever}} \approx \bm{\alpha}\times\mathbf{r} + \w\times(\w\times\mathbf{r}).
+\mathbf{a}_{\mathrm{lever}}\approx \bm{\alpha}\times\mathbf{r} + \w\times(\w\times\mathbf{r}).
 \]
-Implementation caches $\w$ and a smoothed $\bm{\alpha}$.
 
 \paragraph{Bias term modes (implementation).}
-Let temperature compensation be $\mathbf{k}_a(T-T_0)$.
+With temperature compensation $\mathbf{k}_a(T-T_0)$:
 \begin{itemize}
-\item \textbf{Mode A (bias updates enabled):} $\ba_{\text{term}}=\ba + \mathbf{k}_a(T-T_0)$ and $\ba$ is updated.
-\item \textbf{Mode B (bias updates disabled):} $\ba_{\text{term}}=\mathbf{k}_a(T-T_0)$, but $\Cov(\ba)$ is still injected into innovation as nuisance noise.
+\item Mode A (bias updates enabled): $\ba_{\mathrm{term}}=\ba+\mathbf{k}_a(T-T_0)$ and $\ba$ is updated.
+\item Mode B (bias updates disabled): $\ba_{\mathrm{term}}=\mathbf{k}_a(T-T_0)$, but $\mathrm{Cov}(\ba)$ is injected into innovation as nuisance noise.
 \end{itemize}
 
 \subsection{Residual and Jacobians}
-Residual:
-\[
-\mathbf{r}_a = \accm - \hat{\accm}.
-\]
-Let $\mathbf{f}_{\text{cog}}=\RwB(\aw-\gvec)$ in BODY'. Using $\delta(\RwB\uvec)=-\skew{\RwB\uvec}\dth$:
+Predicted mean $\hat{\accm}$ is the RHS of \eqref{eq:acc_model} without $\eta_a$.
+Residual: $\mathbf{r}_a=\accm-\hat{\accm}$.
+
+Let $\mathbf{f}_{\mathrm{cog}}=\RwB(\aw-\gvec)$. Using $\delta(\RwB \mathbf{u})=-\skew{\RwB\mathbf{u}}\dth$:
 \begin{equation}
-\mathbf{J}_\theta = \frac{\partial \hat{\accm}}{\partial \dth} = -\skew{\mathbf{f}_{\text{cog}}}.
+\mathbf{J}_\theta = \frac{\partial \hat{\accm}}{\partial \dth}
+= -\skew{\mathbf{f}_{\mathrm{cog}}}.
 \label{eq:Jtheta_acc}
 \end{equation}
 From \eqref{eq:aw}:
 \[
-\frac{\partial \aw}{\partial \pvec_k}=-\omega_k^2\I,\quad
-\frac{\partial \aw}{\partial \vvec_k}=-2\zeta_k\omega_k\I,
+\frac{\partial \aw}{\partial \mathbf{p}_k}=-\omega_k^2\I,\qquad
+\frac{\partial \aw}{\partial \mathbf{v}_k}=-2\zeta_k\omega_k\I,
 \]
-thus (BODY'):
+so
 \[
-\frac{\partial \hat{\accm}}{\partial \pvec_k}=\RwB(-\omega_k^2\I),\qquad
-\frac{\partial \hat{\accm}}{\partial \vvec_k}=\RwB(-2\zeta_k\omega_k\I).
+\frac{\partial \hat{\accm}}{\partial \mathbf{p}_k}=\RwB(-\omega_k^2\I),\qquad
+\frac{\partial \hat{\accm}}{\partial \mathbf{v}_k}=\RwB(-2\zeta_k\omega_k\I).
 \]
-If accel bias is enabled and updates allowed: $\mathbf{J}_{ba}=\I$.
+If accel bias updates are enabled, $\partial\hat{\accm}/\partial \ba=\I$.
 
-\subsection{Innovation covariance, disabled-wave marginalization}
-Let $\mathbf{R}_{acc}$ be diagonal measurement noise. Innovation covariance:
+\subsection{Innovation covariance, NIS gate, Joseph update}
+Let $\mathbf{R}_{acc}$ be diagonal accel measurement covariance.
+Innovation covariance:
 \[
-\mathbf{S}=\mathbf{R}_{acc}+\mathbf{J}\mathbf{P}\mathbf{J}^\top.
+\mathbf{S}=\mathbf{R}_{acc} + \mathbf{J}\mathbf{P}\mathbf{J}^\top.
 \]
-If wave block is disabled, inject missing wave-accel uncertainty:
+If the wave block is disabled, missing wave acceleration uncertainty is injected:
 \[
-\mathbf{S}\leftarrow \mathbf{S} + \RwB\,\Sigma_{\aw}^{(\text{disabled})}\,\RwB^\top,
+\mathbf{S}\leftarrow \mathbf{S} + \RwB\,\Sigma_{\aw}^{(\mathrm{disabled})}\,\RwB^\top.
 \]
-with diagonal $\Sigma_{\aw}^{(\text{disabled})}$ derived from steady-state oscillator moments.
-If accel bias updates are disabled (Mode B), add $P_{ba,ba}$ to $\mathbf{S}$ as nuisance noise.
+If accel bias updates are disabled (Mode B), add $\mathbf{P}_{ba,ba}$ to $\mathbf{S}$ as nuisance.
 
-\subsection{NIS gate and Joseph update}
-Compute NIS:
+NIS:
 \[
-\mathrm{NIS}=\mathbf{r}_a^\top\mathbf{S}^{-1}\mathbf{r}_a.
+\mathrm{NIS}=\mathbf{r}_a^\top \mathbf{S}^{-1}\mathbf{r}_a,
 \]
-Reject if NIS exceeds a gate. Otherwise compute
+reject if above a gate.
+
+Gain:
 \[
-\mathbf{K}=\mathbf{P}\mathbf{J}^\top\mathbf{S}^{-1},\qquad
-\mathbf{x}\leftarrow \mathbf{x}+\mathbf{K}\mathbf{r}_a,
+\mathbf{K}=\mathbf{P}\mathbf{J}^\top\mathbf{S}^{-1},
 \]
-then Joseph-form covariance update (implementation-matching):
+then state update $\mathbf{x}\leftarrow \mathbf{x}+\mathbf{K}\mathbf{r}_a$ and Joseph-form covariance update:
 \begin{equation}
 \mathbf{P}\leftarrow \mathbf{P}
 - \mathbf{K}(\mathbf{P}\mathbf{J}^\top)
 - (\mathbf{K}(\mathbf{P}\mathbf{J}^\top))^\top
 + \mathbf{K}\mathbf{S}\mathbf{K}^\top.
-\label{eq:joseph_like}
+\label{eq:joseph}
 \end{equation}
-Apply quaternion correction \eqref{eq:q_correction} and clear $\dth$.
+Finally apply quaternion correction \eqref{eq:q_correction} and clear $\dth$.
 
 % ==============================================================================
 \section{Magnetometer Update: Tilt-Compensated Direction-Only}
-\subsection{Horizontal direction measurement}
-Let $\mathbf{B}_W$ be the world magnetic reference. Predicted field in BODY':
+
+\subsection{Direction-only measurement}
+Let $\mathbf{B}_W$ be the world magnetic reference.
+Predicted field in BODY':
 \[
 \hat{\mathbf{b}}=\RwB\mathbf{B}_W.
 \]
 Predicted down direction in BODY':
 \[
-\mathbf{d}=\RwB\eThree,\quad \eThree=[0,0,1]^\top.
+\mathbf{d}=\RwB\eThree,\qquad \eThree=[0,0,1]^\top.
 \]
 Horizontal projector:
 \[
@@ -419,85 +425,81 @@ Project and normalize:
 \mathbf{z}=\frac{\mathbf{P}_h\magm}{\norm{\mathbf{P}_h\magm}},\qquad
 \mathbf{h}=\frac{\mathbf{P}_h\hat{\mathbf{b}}}{\norm{\mathbf{P}_h\hat{\mathbf{b}}}}.
 \]
-Resolve 180\textdegree\ ambiguity: if $\mathbf{z}^\top\mathbf{h}<0$ then $\mathbf{h}\leftarrow-\mathbf{h}$.
+Resolve $180^\circ$ ambiguity: if $\mathbf{z}^\top\mathbf{h}<0$, flip $\mathbf{h}\leftarrow-\mathbf{h}$.
 Residual: $\mathbf{r}_m=\mathbf{z}-\mathbf{h}$.
 
-\subsection{Finite-difference Jacobian (implementation-robust)}
-Analytic Jacobians are easy to get wrong with this projection+normalization+flip, so the implementation can use symmetric finite differences that exactly match the correction convention:
-\begin{equation}
-\mathbf{J}_\theta[:,i] \approx \frac{\mathbf{h}(\qref\otimes\exp(\tfrac12\eps \mathbf{e}_i))
--\mathbf{h}(\qref\otimes\exp(-\tfrac12\eps \mathbf{e}_i))}{2\eps},
-\label{eq:fd_jac}
-\end{equation}
-where $\mathbf{h}(\cdot)$ recomputes the direction prediction and enforces the \emph{same branch} as the nominal $\mathbf{h}$ (flip if dot with nominal is negative). This prevents Jacobian sign discontinuities.
-
-\subsection{Direction-domain noise scaling}
-If raw magnetometer covariance is $\mathbf{R}_{mag}$ (diagonal, BODY'), a practical direction-noise variance is:
+\subsection{Finite-difference Jacobian (robust to projection/flip)}
+Analytic Jacobians for projection + normalization + flip are easy to break.
+A robust implementation-matched choice is symmetric finite differences w.r.t.\ $\dth$ using the \emph{same} correction convention:
 \[
-\sigma_{\text{dir}}^2 \approx \frac{\tfrac{1}{3}\mathrm{tr}(\mathbf{R}_{mag})}{\norm{\mathbf{P}_h\magm}^2},
-\qquad
-\mathbf{S}\approx \sigma_{\text{dir}}^2\I + \mathbf{J}_\theta P_{\theta\theta}\mathbf{J}_\theta^\top.
+\mathbf{J}_\theta[:,i]\approx
+\frac{\mathbf{h}(\qref\otimes\exp(\tfrac12\epsilon \mathbf{e}_i))-\mathbf{h}(\qref\otimes\exp(-\tfrac12\epsilon \mathbf{e}_i))}
+{2\epsilon},
 \]
-NIS gating is applied as for accelerometer.
+while enforcing the \emph{same branch} as nominal: if the perturbed $\mathbf{h}$ has negative dot with the nominal $\mathbf{h}$, flip it before differencing.
 
-\subsection{Base-only update (recommended)}
-To avoid magnetometer coupling into wave and accel-bias via cross-covariances, the gain is restricted so only attitude (and optionally gyro bias) rows are allowed nonzero; wave and accel-bias rows are forced to zero.
+\subsection{Direction-domain noise and base-only update}
+A practical direction noise variance is
+\[
+\sigma_{\mathrm{dir}}^2 \approx
+\frac{\tfrac13\,\mathrm{tr}(\mathbf{R}_{mag})}{\norm{\mathbf{P}_h\magm}^2},
+\qquad
+\mathbf{S}\approx \sigma_{\mathrm{dir}}^2\I + \mathbf{J}_\theta\mathbf{P}_{\theta\theta}\mathbf{J}_\theta^\top.
+\]
+Apply NIS gating and then a Joseph update as in \eqref{eq:joseph}.
+To avoid coupling magnetometer corrections into wave/bias via cross-covariances, the gain can be restricted to the base states (attitude and optionally gyro bias) by zeroing gain rows for wave and accel-bias indices.
 
 % ==============================================================================
 \section{Warmup and Staged Enabling}
-The implementation supports warmup staging:
+
+Warmup mode is a staged initialization policy:
 \begin{itemize}
-\item \textbf{Warmup on:} wave block disabled and wave covariance reset tiny; lever-arm disabled; accel-bias updates can be disabled; gyro-bias may be learned only when stationarity criteria pass.
-\item \textbf{Exit warmup:} after time/distance thresholds on detected motion (from integrated non-gravity acceleration), enable wave block and restore nominal accelerometer noise.
-\item \textbf{Mag delay:} magnetometer update begins only after a delay to avoid early transient corruption.
+\item Wave block disabled; wave states and their covariance are reset small.
+\item Lever-arm correction can be disabled.
+\item Accelerometer bias updates can be disabled (Mode B), but $\mathrm{Cov}(\ba)$ still contributes as nuisance noise.
+\item Gyro bias can be learned only under stationarity gating (small motion thresholds).
+\item Magnetometer updates are delayed to avoid early transient corruption.
 \end{itemize}
 
 % ==============================================================================
 \section{Axis-Independent Covariance Approximation}
-If enabled, the covariance is forced block-diagonal across axes $x/y/z$.
 
-\subsection{Axis index sets}
-Define axis-specific index sets
-\[
-\mathcal{I}_x,\ \mathcal{I}_y,\ \mathcal{I}_z
-\]
-that include \emph{all} states for that axis:
+If enabled, the covariance is forced block-diagonal across axes $x/y/z$ by removing cross-axis blocks.
+
+\subsection{Index sets}
+Define axis index sets $\mathcal{I}_x,\mathcal{I}_y,\mathcal{I}_z$ that include all states for a given axis:
 \[
 \mathcal{I}_a=\{\dth_a,\ (b_{g,a}),\ p_{1,a},v_{1,a},\dots,p_{K,a},v_{K,a},\ (b_{a,a})\},\quad a\in\{x,y,z\}.
 \]
 
-\subsection{Enforcement step}
+\subsection{Enforcement}
 After propagation and after each measurement update:
 \begin{enumerate}
-\item Zero cross-axis blocks: $\mathbf{P}_{\mathcal{I}_a,\mathcal{I}_b}\leftarrow \0$ for $a\neq b$.
-\item For each axis $a$, PSD-project the submatrix $\mathbf{P}^{(a)}=\mathbf{P}_{\mathcal{I}_a,\mathcal{I}_a}$.
-\item Symmetrize and clamp diagonals.
+\item Set $\mathbf{P}_{\mathcal{I}_a,\mathcal{I}_b}\leftarrow\0$ for $a\neq b$.
+\item For each axis $a$, symmetrize and PSD-project the submatrix $\mathbf{P}_{\mathcal{I}_a,\mathcal{I}_a}$.
+\item Symmetrize full $\mathbf{P}$ and clamp diagonals.
 \end{enumerate}
-This produces
-\[
-\mathbf{P}\approx \diag\bigl(\mathbf{P}^{(x)},\mathbf{P}^{(y)},\mathbf{P}^{(z)}\bigr).
-\]
-\textbf{Note:} this is a stabilization approximation; it breaks statistical optimality when true dynamics couple axes.
+This is a stabilizing approximation (not statistically optimal if true dynamics couple axes).
 
 % ==============================================================================
-\section{Algorithms (Traceable to Implementation)}
+\section{Algorithms (Implementation-Traceable)}
 
 \begin{algorithm}[t]
-\caption{Per-sample update loop (matches high-level call order)}
+\caption{Per-sample update loop (high-level call order)}
 \begin{algorithmic}[1]
-\Require IMU sample $(\w_m,\accm)$ at period $\Ts$; optional mag sample $\magm$; temperature $T$
-\State $\w_m,\accm,\magm \leftarrow \text{deheel}(\cdot)$ \Comment{if heel handling enabled}
+\Require IMU sample $(\w_m,\accm)$ at period $\Ts$, temperature $T$; optional magnetometer sample $\magm$
+\State De-heel IMU vectors if heel compensation is enabled
 \State \textbf{TimeUpdate}$(\w_m,\Ts)$ \Comment{\texttt{time\_update}}
-\If{warmup\_mode}
+\If{warmup mode}
   \State \textbf{WarmupUpdate}$(\accm,\w_m,\Ts)$ \Comment{\texttt{update\_initialization}}
 \EndIf
 \State \textbf{AccelUpdate}$(\accm,T)$ \Comment{\texttt{measurement\_update\_acc\_only}}
-\If{with\_mag \textbf{and} time $>$ mag\_delay \textbf{and} mag sample available}
+\If{mag enabled and delay satisfied and sample available}
   \State \textbf{MagUpdate}$(\magm)$ \Comment{\texttt{measurement\_update\_mag\_only}}
 \EndIf
-\State Symmetrize $\mathbf{P}$; clamp diagonal; PSD-project (as configured)
-\If{axis\_independence}
-  \State EnforceAxisIndependence$(\mathbf{P})$ \Comment{zero cross-axis blocks + per-axis PSD}
+\State Symmetrize $\mathbf{P}$; clamp diagonal; PSD project as configured
+\If{axis-independence enabled}
+  \State Zero cross-axis blocks; per-axis PSD project
 \EndIf
 \end{algorithmic}
 \end{algorithm}
@@ -506,55 +508,25 @@ This produces
 \caption{Oscillator axis discretization (matches \texttt{discretize\_osc\_axis\_})}
 \begin{algorithmic}[1]
 \Require $\omega,\zeta,q,\Ts$
-\State Compute $\Phi(\Ts)$ using \eqref{eq:phi_under}, \eqref{eq:phi_crit}, or \eqref{eq:phi_over}
-\State $\mathbf{u}(t)\gets[\Phi_{01}(t),\Phi_{11}(t)]^\top$ for $t\in\{0,\Ts/2,\Ts\}$
-\State $\mathbf{Q}_d \gets q\cdot\frac{\Ts}{6}\Big(u(0)u(0)^\top + 4u(\Ts/2)u(\Ts/2)^\top + u(\Ts)u(\Ts)^\top\Big)$
-\State Symmetrize and PSD-project $\mathbf{Q}_d$
+\State Compute $\Phi(\Ts)$ using under/critical/over-damped closed forms
+\State $\mathbf{u}(t)\gets[\Phi_{01}(t),\Phi_{11}(t)]^\top$ at $t\in\{0,\Ts/2,\Ts\}$
+\State $\mathbf{Q}_d \gets q\cdot\frac{\Ts}{6}\bigl(u(0)u(0)^\top+4u(\Ts/2)u(\Ts/2)^\top+u(\Ts)u(\Ts)^\top\bigr)$
+\State Symmetrize $\mathbf{Q}_d$ and PSD project
 \State \Return $(\Phi(\Ts),\mathbf{Q}_d)$
 \end{algorithmic}
 \end{algorithm}
 
-\begin{algorithm}[t]
-\caption{Accelerometer update (matches \texttt{measurement\_update\_acc\_only})}
-\begin{algorithmic}[1]
-\Require $\accm, T$; current $(\qref,\mathbf{x},\mathbf{P})$
-\State Compute $\aw$ from \eqref{eq:aw}; $\RwB=\mathbf{R}(\qref)$; $\hat{\accm}$ from \eqref{eq:acc_pred}
-\State $\mathbf{r}_a \gets \accm-\hat{\accm}$
-\State Build $\mathbf{J}_\theta=-\skew{\RwB(\aw-\gvec)}$ and wave/bias Jacobians
-\State $\mathbf{S}\gets \mathbf{R}_{acc}+\mathbf{J}\mathbf{P}\mathbf{J}^\top$
-\If{wave\_disabled} \State $\mathbf{S}\gets \mathbf{S}+\RwB\Sigma_{\aw}^{(\text{disabled})}\RwB^\top$ \EndIf
-\If{bias\_updates\_disabled} \State $\mathbf{S}\gets \mathbf{S}+\mathbf{P}_{ba,ba}$ \EndIf
-\State Compute NIS; reject if too large
-\State $\mathbf{K}\gets \mathbf{P}\mathbf{J}^\top\mathbf{S}^{-1}$; freeze wave rows if disabled; zero bias rows if locked
-\State $\mathbf{x}\gets \mathbf{x}+\mathbf{K}\mathbf{r}_a$
-\State Joseph update \eqref{eq:joseph_like}; apply quaternion correction \eqref{eq:q_correction}
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[t]
-\caption{Magnetometer update (matches \texttt{measurement\_update\_mag\_only})}
-\begin{algorithmic}[1]
-\Require $\magm$; current $(\qref,\mathbf{x},\mathbf{P})$
-\State Compute $\mathbf{z},\mathbf{h}$ using projection $\mathbf{P}_h=\I-\mathbf{d}\mathbf{d}^\top$ and normalize; handle 180\textdegree\ flip
-\State $\mathbf{r}_m \gets \mathbf{z}-\mathbf{h}$
-\State Compute $\mathbf{J}_\theta$ by symmetric FD \eqref{eq:fd_jac} (keeping same branch as nominal)
-\State $\mathbf{S}\gets \sigma_{\text{dir}}^2\I+\mathbf{J}_\theta P_{\theta\theta}\mathbf{J}_\theta^\top$; NIS gate
-\State Compute gain; \textbf{force base-only rows} (zero wave and accel-bias rows)
-\State Update $\mathbf{x},\mathbf{P}$ using Joseph form; apply quaternion correction \eqref{eq:q_correction}
-\end{algorithmic}
-\end{algorithm}
-
 % ==============================================================================
-\section{Implementation Mapping (So the Doc Can't Drift)}
-This section explicitly maps math to the reference code structure.
+\section{Checklist (What Must Match the Code)}
 \begin{itemize}
-\item \textbf{Quaternion propagation:} \eqref{eq:q_prop} $\leftrightarrow$ \texttt{qref\_ = qref\_ * quat\_from\_delta\_theta(omega*dt)}.
-\item \textbf{Base Qd integrals:} \eqref{eq:Qtt}--\eqref{eq:Qtb} $\leftrightarrow$ \texttt{simpson\_R\_Q\_RT\_}, \texttt{simpson\_B\_Q\_BT\_}, \texttt{integral\_B\_ds\_}.
-\item \textbf{Oscillator $\Phi,Q_d$:} \eqref{eq:phi_under}--\eqref{eq:qd_int} $\leftrightarrow$ \texttt{phi\_osc\_2x2\_}, \texttt{discretize\_osc\_axis\_}.
-\item \textbf{$6\times 6$ assembly:} $(\pvec,\vvec)$ block structure $\leftrightarrow$ \texttt{Phi6\_, Qd6\_} assembly.
-\item \textbf{Accel update:} \eqref{eq:acc_pred}, \eqref{eq:Jtheta_acc}, and Joseph update \eqref{eq:joseph_like} $\leftrightarrow$ \texttt{measurement\_update\_acc\_only} and \texttt{joseph\_update3\_}.
-\item \textbf{Mag update:} direction-only projection and FD Jacobian \eqref{eq:fd_jac} $\leftrightarrow$ \texttt{measurement\_update\_mag\_only}.
-\item \textbf{Axis-independence:} block-diagonal enforcement $\leftrightarrow$ \texttt{enforce\_axis\_independence\_P\_()} (or equivalent).
+\item $\qref$ is WORLD$\rightarrow$BODY' and correction is right-multiply \eqref{eq:q_correction}.
+\item WORLD is NED with $+Z$ down; $\gvec=[0,0,g]^\top$.
+\item Wave acceleration is computed in WORLD by \eqref{eq:aw}, rotated only inside measurement prediction.
+\item Wave state ordering is p(3) then v(3) per mode; $6\times6$ assembly must match.
+\item Accel update uses $-\skew{\RwB(\aw-\gvec)}$ for the attitude Jacobian.
+\item Mag update is direction-only with horizontal projection and $180^\circ$ ambiguity handling; FD Jacobian keeps a fixed branch.
+\item Joseph update uses the three-term form \eqref{eq:joseph} and is followed by quaternion correction.
+\item Optional axis-independence zeroes cross-axis blocks in $\mathbf{P}$.
 \end{itemize}
 
 \end{document}
